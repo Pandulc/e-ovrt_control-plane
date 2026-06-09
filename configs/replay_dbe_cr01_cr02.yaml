@@ -1,0 +1,27 @@
+run:
+  id: null
+  scenario: DBE
+  name: replay_dbe_cr01_cr02
+  description: "Replay offline de detecciones del plano de medios para patrones CR-01 y CR-02."
+
+input:
+  type: media_jsonl
+  path: ../../e-ovrt_media-plane/runs/latest/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_v1.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO
+

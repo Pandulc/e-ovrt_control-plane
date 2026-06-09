@@ -1,0 +1,36 @@
+[project]
+name = "eovrt-control-plane"
+version = "0.1.0"
+description = "Experimental control plane for E-OVRT-VDP"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic",
+    "pyyaml",
+    "typer",
+    "rich",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[project.scripts]
+eovrt-control = "eovrt_control.cli:app"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
