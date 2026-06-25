@@ -9,7 +9,7 @@ Esta primera iteracion baja deliberadamente la complejidad operacional para conc
 - Entrada offline DBE desde `detections.jsonl` del plano de medios.
 - Patrones CR-01 y CR-02 sobre evidencia `person`, `helmet` y `vest`.
 - Persistencia append-only en JSONL, sin base de datos robusta.
-- Estado temporal simple por persona observada en una unidad visual.
+- Estado temporal simple por sujeto observado, con persistencia por `timestamp_ms` y fallback por frames.
 - CLI local para replay y generacion de artefactos de corrida.
 
 No incluye servicio HTTP, UI, brokers, base de datos relacional/documental, tracking multi-frame avanzado, zonas, integracion con notificaciones externas ni decisiones normativas automaticas.
@@ -78,7 +78,7 @@ Metricas principales:
 - unexpected alerts;
 - duplicate alerts;
 - precision, recall y F1;
-- latencia promedio desde primera evidencia hasta alerta.
+- latencia promedio desde primera evidencia hasta alerta, en frames y milisegundos cuando hay timestamps.
 
 ## Estado
 

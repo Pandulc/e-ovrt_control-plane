@@ -55,6 +55,7 @@ def test_simulated_temporal_replay_matches_expected_alerts(tmp_path) -> None:
     assert evaluation.recall == 1.0
     assert evaluation.f1 == 1.0
     assert evaluation.avg_latency_frames_from_first_evidence == 2.0
+    assert evaluation.avg_latency_ms_from_first_evidence == 1000.0
     assert (run_dir / "eval_temporal.json").exists()
 
 

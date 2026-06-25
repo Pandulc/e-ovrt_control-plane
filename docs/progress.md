@@ -24,6 +24,8 @@
 - Se definieron metricas de evaluacion: expected/observed/matched/missed/unexpected/duplicates, precision, recall, F1 y latencia hasta alerta.
 - Se valido el caso feliz: 2 alertas esperadas, 2 observadas, 0 missed, 0 unexpected, precision/recall/F1 = 1.0.
 - Se agregaron pruebas automatizadas del replay simulado y del reporte de alertas inesperadas.
+- Se migro la persistencia temporal del motor a ventanas por `timestamp_ms`, manteniendo fallback por frames.
+- Se explicito que el plano de control no realiza tracking; la identidad estable debe venir del plano de medios o de fixtures preparados.
 
 ## Pendiente inmediato
 
@@ -31,5 +33,5 @@
 - Generar fixtures a partir de clips reales seleccionados para evaluacion de pipeline.
 - Calibrar thresholds de region/confianza con salidas DBE.
 - Extender ground truth temporal para ventanas, falsos positivos por minuto y tiempo maximo aceptable hasta alerta.
-- Evaluar si se requiere tracking temporal antes de pasar a escenarios EBE.
+- Definir el contrato de identificador estable de sujeto emitido por el plano de medios antes de pasar a escenarios EBE.
 

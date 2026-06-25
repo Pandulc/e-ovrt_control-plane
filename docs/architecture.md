@@ -34,7 +34,13 @@ El plano de medios produce evidencia positiva para `person`, `helmet` y `vest`. 
 
 Esta aproximacion es intencionalmente simple. Es apta para primeras corridas DBE, pero no reemplaza tracking, segmentacion, calibracion por escena ni validacion estadistica posterior.
 
-## Persistencia
+## Persistencia temporal
+
+El motor de patrones confirma y resuelve condiciones mediante ventanas basadas en `timestamp_ms` cuando la evidencia del plano de medios lo provee. Los umbrales `confirm_after_ms` y `resolve_after_ms` son el criterio preferido para video; `confirm_after_frames` y `resolve_after_frames` quedan como fallback para fixtures o artefactos historicos sin timestamp.
+
+El plano de control no realiza tracking. Si una corrida requiere identidad estable entre frames, el plano de medios debe publicar un identificador estable de sujeto o track dentro de la evidencia normalizada.
+
+## Persistencia de artefactos
 
 Se usa JSONL append-only para conservar bajo el costo de cambio. Una base de datos mas robusta puede incorporarse luego cuando la logica este estabilizada y haya necesidades claras de consulta, retencion o integracion.
 

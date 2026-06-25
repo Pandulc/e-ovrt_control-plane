@@ -17,6 +17,8 @@ class PatternRuntimeState:
     state: str = "inactive"
     hit_count: int = 0
     clear_count: int = 0
+    first_hit_timestamp_ms: float | None = None
+    clear_started_timestamp_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -78,24 +80,35 @@ class PatternEngine:
         key = (pattern.id, subject_key)
         runtime_state = self._state.setdefault(key, PatternRuntimeState())
         previous = runtime_state.state
+
+        if runtime_state.state in {"inactive", "resolved"}:
+            runtime_state.hit_count = 0
+            runtime_state.first_hit_timestamp_ms = event.source.timestamp_ms
+
+        if runtime_state.first_hit_timestamp_ms is None:
+            runtime_state.first_hit_timestamp_ms = event.source.timestamp_ms
+
         runtime_state.hit_count += 1
         runtime_state.clear_count = 0
+        runtime_state.clear_started_timestamp_ms = None
 
-        if runtime_state.state == "inactive":
+        if runtime_state.state in {"inactive", "resolved"}:
             runtime_state.state = (
                 "confirmed"
-                if runtime_state.hit_count >= pattern.timing.confirm_after_frames
+                if self._confirmation_met(event, pattern, runtime_state)
                 else "candidate"
             )
         elif runtime_state.state == "candidate":
-            if runtime_state.hit_count >= pattern.timing.confirm_after_frames:
+            if self._confirmation_met(event, pattern, runtime_state):
                 runtime_state.state = "confirmed"
         elif runtime_state.state == "confirmed":
             runtime_state.state = "sustained"
 
         if previous == runtime_state.state:
             return None
-        return self._make_state_event(event, pattern, subject_key, previous, runtime_state.state, evidence)
+        return self._make_state_event(
+            event, pattern, subject_key, previous, runtime_state.state, evidence
+        )
 
     def _advance_clear(
         self,
@@ -108,12 +121,21 @@ class PatternEngine:
         if runtime_state is None or runtime_state.state in {"inactive", "resolved"}:
             return None
 
+        if runtime_state.clear_count == 0:
+            runtime_state.clear_started_timestamp_ms = event.source.timestamp_ms
+        if runtime_state.clear_started_timestamp_ms is None:
+            runtime_state.clear_started_timestamp_ms = event.source.timestamp_ms
+
         runtime_state.clear_count += 1
-        if runtime_state.clear_count < pattern.timing.resolve_after_frames:
+        if not self._resolution_met(event, pattern, runtime_state):
             return None
 
         previous = runtime_state.state
         runtime_state.state = "resolved"
+        runtime_state.hit_count = 0
+        runtime_state.clear_count = 0
+        runtime_state.first_hit_timestamp_ms = None
+        runtime_state.clear_started_timestamp_ms = None
         placeholder = PatternEvidence(
             pattern_id=pattern.id,
             condition_id=pattern.condition_id,
@@ -128,7 +150,39 @@ class PatternEngine:
             score=0.0,
             rationale="El sujeto observado ya no satisface el patron.",
         )
-        return self._make_state_event(event, pattern, subject_key, previous, "resolved", placeholder)
+        return self._make_state_event(
+            event, pattern, subject_key, previous, "resolved", placeholder
+        )
+
+    def _confirmation_met(
+        self,
+        event: DetectionEvent,
+        pattern: PatternDefinition,
+        runtime_state: PatternRuntimeState,
+    ) -> bool:
+        if (
+            pattern.timing.confirm_after_ms is not None
+            and event.source.timestamp_ms is not None
+            and runtime_state.first_hit_timestamp_ms is not None
+        ):
+            elapsed_ms = event.source.timestamp_ms - runtime_state.first_hit_timestamp_ms
+            return elapsed_ms >= pattern.timing.confirm_after_ms
+        return runtime_state.hit_count >= pattern.timing.confirm_after_frames
+
+    def _resolution_met(
+        self,
+        event: DetectionEvent,
+        pattern: PatternDefinition,
+        runtime_state: PatternRuntimeState,
+    ) -> bool:
+        if (
+            pattern.timing.resolve_after_ms is not None
+            and event.source.timestamp_ms is not None
+            and runtime_state.clear_started_timestamp_ms is not None
+        ):
+            elapsed_ms = event.source.timestamp_ms - runtime_state.clear_started_timestamp_ms
+            return elapsed_ms >= pattern.timing.resolve_after_ms
+        return runtime_state.clear_count >= pattern.timing.resolve_after_frames
 
     def _make_state_event(
         self,
@@ -179,4 +233,3 @@ class PatternEngine:
             frame_index=event.source.frame_index,
             timestamp_ms=event.source.timestamp_ms,
         )
-

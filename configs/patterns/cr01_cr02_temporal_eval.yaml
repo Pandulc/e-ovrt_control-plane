@@ -22,6 +22,8 @@ pattern_set:
       timing:
         confirm_after_frames: 3
         resolve_after_frames: 2
+        confirm_after_ms: 1000.0
+        resolve_after_ms: 500.0
 
     - id: CR-02
       name: person_without_vest
@@ -43,3 +45,5 @@ pattern_set:
       timing:
         confirm_after_frames: 3
         resolve_after_frames: 2
+        confirm_after_ms: 1000.0
+        resolve_after_ms: 500.0

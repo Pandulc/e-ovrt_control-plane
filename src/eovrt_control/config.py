@@ -37,6 +37,8 @@ class PatternEvidenceConfig(BaseModel):
 class PatternTimingConfig(BaseModel):
     confirm_after_frames: int = 1
     resolve_after_frames: int = 1
+    confirm_after_ms: float | None = None
+    resolve_after_ms: float | None = None
 
 
 class PatternDefinition(BaseModel):
@@ -133,4 +135,3 @@ def load_replay_config(path: str | Path) -> ReplayConfig:
     patterns_path = config.resolve_path(config.patterns.file)
     config.patterns_file = load_patterns_file(patterns_path)
     return config
-
