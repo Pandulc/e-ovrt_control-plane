@@ -41,6 +41,45 @@ La corrida crea un directorio bajo `runs/` con:
 - `errors.jsonl`
 - `summary.json`
 
+## Simulacion temporal CR-01/CR-02
+
+El repo incluye un fixture sintetico que simula la salida del plano de medios
+(`media.detection.v1`) para probar persistencia temporal en el plano de control:
+
+- `worker_a`: CR-01 persistente, persona sin casco durante 3+ frames.
+- `worker_b`: condicion transitoria sin EPP durante 2 frames, no debe alertar.
+- `worker_c`: CR-02 persistente, persona sin chaleco durante 3+ frames.
+
+Generar fixtures:
+
+```bash
+python scripts/generate_temporal_eval_fixture.py
+```
+
+Ejecutar replay:
+
+```bash
+eovrt-control replay configs/replay_simulated_cr01_cr02_temporal.yaml
+```
+
+Evaluar alertas contra ground truth temporal debil:
+
+```bash
+eovrt-control evaluate-alerts \
+  runs/simulated_cr01_cr02_temporal/alerts.jsonl \
+  fixtures/simulated_media/cr01_cr02_temporal/ground_truth.json \
+  --output runs/simulated_cr01_cr02_temporal/eval_temporal.json
+```
+
+Metricas principales:
+
+- alertas esperadas/observadas/matcheadas;
+- missed alerts;
+- unexpected alerts;
+- duplicate alerts;
+- precision, recall y F1;
+- latencia promedio desde primera evidencia hasta alerta.
+
 ## Estado
 
 Ver [docs/progress.md](docs/progress.md).

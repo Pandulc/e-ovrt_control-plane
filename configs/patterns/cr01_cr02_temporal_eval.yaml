@@ -1,0 +1,45 @@
+pattern_set:
+  id: cr01_cr02_temporal_eval
+  description: "Patrones CR-01/CR-02 con persistencia temporal para pruebas simuladas."
+  patterns:
+    - id: CR-01
+      name: person_without_helmet
+      description: "Persona observada sin evidencia asociada de casco durante ventana persistente."
+      enabled: true
+      condition_id: CR-01
+      severity: medium
+      subject_class: person
+      required_absent_class: helmet
+      region:
+        type: upper_body
+        y_min_ratio: 0.0
+        y_max_ratio: 0.45
+        x_margin_ratio: 0.12
+      evidence:
+        min_subject_confidence: 0.35
+        min_absent_class_confidence: 0.25
+        min_subject_area_px: 400.0
+      timing:
+        confirm_after_frames: 3
+        resolve_after_frames: 2
+
+    - id: CR-02
+      name: person_without_vest
+      description: "Persona observada sin evidencia asociada de chaleco durante ventana persistente."
+      enabled: true
+      condition_id: CR-02
+      severity: medium
+      subject_class: person
+      required_absent_class: vest
+      region:
+        type: torso
+        y_min_ratio: 0.25
+        y_max_ratio: 0.85
+        x_margin_ratio: 0.08
+      evidence:
+        min_subject_confidence: 0.35
+        min_absent_class_confidence: 0.25
+        min_subject_area_px: 400.0
+      timing:
+        confirm_after_frames: 3
+        resolve_after_frames: 2

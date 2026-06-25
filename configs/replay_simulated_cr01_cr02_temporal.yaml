@@ -1,0 +1,26 @@
+run:
+  id: simulated_cr01_cr02_temporal
+  scenario: DBE
+  name: replay_simulated_cr01_cr02_temporal
+  description: "Replay de una escena sintetica con riesgos persistentes y transitorios."
+
+input:
+  type: media_jsonl
+  path: ../fixtures/simulated_media/cr01_cr02_temporal/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_temporal_eval.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO

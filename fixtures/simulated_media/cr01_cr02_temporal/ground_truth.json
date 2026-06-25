@@ -1,0 +1,24 @@
+{
+  "scenario_id": "cr01_cr02_temporal",
+  "description": "Escena sintetica con CR-01 persistente, CR-02 persistente y riesgo transitorio no alertable.",
+  "expected_alerts": [
+    {
+      "id": "worker_a_cr01",
+      "condition_id": "CR-01",
+      "subject_key": "CR-01:sim-risk-stream:worker_a",
+      "first_evidence_frame_index": 3,
+      "expected_alert_frame_index": 5,
+      "max_alert_frame_index": 5,
+      "first_evidence_timestamp_ms": 1500.0
+    },
+    {
+      "id": "worker_c_cr02",
+      "condition_id": "CR-02",
+      "subject_key": "CR-02:sim-risk-stream:worker_c",
+      "first_evidence_frame_index": 5,
+      "expected_alert_frame_index": 7,
+      "max_alert_frame_index": 7,
+      "first_evidence_timestamp_ms": 2500.0
+    }
+  ]
+}

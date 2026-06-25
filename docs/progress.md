@@ -15,10 +15,21 @@
 - Se agregaron pruebas unitarias para configuracion, evaluador y motor de patrones.
 - Se verifico la implementacion con `pytest` y `ruff`.
 
+## 2026-06-24
+
+- Se agrego un flujo de evaluacion temporal simulado para probar la mitad media-plane -> control-plane sin depender aun de inferencia real.
+- Se incorporo un fixture `media.detection.v1` sintetico con 12 unidades visuales, tres sujetos y condiciones persistentes/transitorias.
+- Se agrego `cr01_cr02_temporal_eval` con `confirm_after_frames=3` y `resolve_after_frames=2`.
+- Se agrego `eovrt-control evaluate-alerts` para comparar `alerts.jsonl` contra ground truth temporal debil.
+- Se definieron metricas de evaluacion: expected/observed/matched/missed/unexpected/duplicates, precision, recall, F1 y latencia hasta alerta.
+- Se valido el caso feliz: 2 alertas esperadas, 2 observadas, 0 missed, 0 unexpected, precision/recall/F1 = 1.0.
+- Se agregaron pruebas automatizadas del replay simulado y del reporte de alertas inesperadas.
+
 ## Pendiente inmediato
 
 - Ejecutar replay con artefactos reales del plano de medios.
+- Generar fixtures a partir de clips reales seleccionados para evaluacion de pipeline.
 - Calibrar thresholds de region/confianza con salidas DBE.
-- Agregar fixtures representativos de detecciones reales.
+- Extender ground truth temporal para ventanas, falsos positivos por minuto y tiempo maximo aceptable hasta alerta.
 - Evaluar si se requiere tracking temporal antes de pasar a escenarios EBE.
 
