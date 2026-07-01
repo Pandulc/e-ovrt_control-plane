@@ -49,12 +49,20 @@ class DetectionEventPrompts(BaseModel):
 
 
 class DetectionEventTiming(BaseModel):
-    read_ms: float = 0.0
-    preprocess_ms: float = 0.0
+    normalize_ms: float | None = None
     inference_ms: float = 0.0
     postprocess_ms: float = 0.0
     write_ms: float = 0.0
     total_ms: float = 0.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_timing_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data.pop("read_ms", None)
+        data.pop("preprocess_ms", None)
+        return data
 
 
 class DetectionEvent(BaseModel):

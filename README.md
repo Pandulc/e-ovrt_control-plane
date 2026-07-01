@@ -50,7 +50,25 @@ El repo incluye un fixture sintetico que simula la salida del plano de medios
 - `worker_b`: condicion transitoria sin EPP durante 2 frames, no debe alertar.
 - `worker_c`: CR-02 persistente, persona sin chaleco durante 3+ frames.
 
-Generar fixtures:
+## Generador liviano HF/YOLO (sin plano de medios)
+
+Para probar el control plane con inferencia real sin levantar el media plane:
+
+```bash
+pip install -e ".[perception]"
+eovrt-control generate-detections \
+  --input path/a/imagenes_o_video \
+  --output fixtures/hf_media/latest/detections.jsonl \
+  --backend yolo-ppe \
+  --device cuda \
+  --run-id run_20260626_001 \
+  --source-id camera_01
+eovrt-control replay configs/replay_hf_detections.yaml
+```
+
+Ver `fixtures/hf_media/README.md` y `scripts/generate_hf_detections.py`.
+
+Generar fixtures sinteticos manuales:
 
 ```bash
 python scripts/generate_temporal_eval_fixture.py

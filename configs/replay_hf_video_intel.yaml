@@ -1,0 +1,26 @@
+run:
+  id: null
+  scenario: DBE
+  name: replay_hf_detections
+  description: "Replay sobre detections.jsonl generado por generate_hf_detections.py"
+
+input:
+  type: media_jsonl
+  path: ../fixtures/hf_media/video_intel/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_v1.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO

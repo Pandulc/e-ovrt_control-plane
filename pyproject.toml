@@ -15,6 +15,16 @@ dev = [
     "pytest",
     "ruff",
 ]
+perception = [
+    "torch",
+    "torchvision",
+    "transformers",
+    "accelerate",
+    "huggingface_hub",
+    "pillow",
+    "opencv-python-headless",
+    "ultralytics",
+]
 
 [project.scripts]
 eovrt-control = "eovrt_control.cli:app"
