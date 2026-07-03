@@ -13,13 +13,13 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from eovrt_control.perception.backends import BackendConfig, PerceptionBackend, create_backend
-from eovrt_control.perception.events import build_detection_event, serialize_event
+from eovrt_labs.perception.backends import BackendConfig, PerceptionBackend, create_backend
+from eovrt_labs.perception.events import build_detection_event, serialize_event
 from eovrt_control.contracts.media import DetectionEvent
-from eovrt_control.perception.normalizer import normalize_detections, postprocess_raw_detections
-from eovrt_control.perception.tracking import SimpleIoUTracker, apply_person_tracking
-from eovrt_control.perception.weights import DEFAULT_YOLOE_MODEL_ID, DEFAULT_WEIGHTS_FILENAME
-from eovrt_control.visualization.alert_frames import (
+from eovrt_labs.perception.normalizer import normalize_detections, postprocess_raw_detections
+from eovrt_labs.perception.tracking import SimpleIoUTracker, apply_person_tracking
+from eovrt_labs.perception.weights import DEFAULT_YOLOE_MODEL_ID, DEFAULT_WEIGHTS_FILENAME
+from eovrt_labs.visualization.frame_drawing import (
     AlertFrameConfig,
     AlertFrameResult,
     draw_alert_frames,

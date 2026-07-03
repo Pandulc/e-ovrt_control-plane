@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 
-from eovrt_control.visualization.alert_frames import (
+from eovrt_control.sinks.alerts_csv import (
     export_alert_details_csv,
     read_alert_annotations,
 )

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from eovrt_control.contracts.media import Detection
-from eovrt_control.perception.events import RawModelDetection
-from eovrt_control.perception.labels import CANONICAL_LABELS
+from eovrt_labs.perception.events import RawModelDetection
+from eovrt_labs.perception.labels import CANONICAL_LABELS
 
 DEFAULT_CLASS_CONFIDENCE_THRESHOLDS: dict[str, float] = {
     "person": 0.35,

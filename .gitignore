@@ -8,6 +8,11 @@ dist/
 build/
 runs/*
 !runs/.gitkeep
+labs_runs/
+tmp/
 models/yolo/
 models/yoloe/
+
+# Detecciones generadas por el generador (labs); no versionar salidas pesadas.
+fixtures/hf_media/**/detections*.jsonl
 

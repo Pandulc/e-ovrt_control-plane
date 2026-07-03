@@ -13,7 +13,7 @@ from eovrt_control.engine.pattern_engine import PatternEngine
 from eovrt_control.sinks.artifacts import RunArtifacts
 from eovrt_control.sinks.jsonl import JsonlSink
 from eovrt_control.sources.media_jsonl import iter_media_jsonl
-from eovrt_control.visualization.alert_frames import export_alert_details_csv
+from eovrt_control.sinks.alerts_csv import export_alert_details_csv
 
 
 def _utc_now() -> str:

@@ -10,8 +10,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from eovrt_control.perception.events import RawModelDetection
-from eovrt_control.perception.labels import (
+from eovrt_labs.perception.events import RawModelDetection
+from eovrt_labs.perception.labels import (
     GDINO_PROMPTS,
     YOLOE_PROMPTS,
     normalize_gdino_label,
@@ -161,7 +161,7 @@ class YoloPpeBackend(PerceptionBackend):
     def load(self) -> None:
         from ultralytics import YOLO
 
-        from eovrt_control.perception.weights import ensure_yolo_ppe_weights
+        from eovrt_labs.perception.weights import ensure_yolo_ppe_weights
 
         self._resolved_device = _resolve_torch_device(self.config.device)
         self._weights_path = ensure_yolo_ppe_weights(self.config.model_id)
@@ -231,7 +231,7 @@ class YoloeBackend(PerceptionBackend):
     def load(self) -> None:
         from ultralytics import YOLOE
 
-        from eovrt_control.perception.weights import (
+        from eovrt_labs.perception.weights import (
             DEFAULT_YOLOE_MODEL_ID,
             ensure_yoloe_weights,
         )
@@ -298,7 +298,7 @@ class YoloeBackend(PerceptionBackend):
 
     @property
     def model_id(self) -> str:
-        from eovrt_control.perception.weights import DEFAULT_YOLOE_MODEL_ID
+        from eovrt_labs.perception.weights import DEFAULT_YOLOE_MODEL_ID
 
         if self._weights_path is not None:
             return DEFAULT_YOLOE_MODEL_ID

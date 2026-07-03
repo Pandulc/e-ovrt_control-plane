@@ -280,7 +280,7 @@ def apply_person_tracking(
     timestamp_ms: float | None = None,
 ) -> list:
     """Asigna detection_id estables a personas cuando hay tracker activo."""
-    from eovrt_control.perception.events import RawModelDetection
+    from eovrt_labs.perception.events import RawModelDetection
 
     if tracker is None:
         return raw

@@ -7,15 +7,15 @@ import sys
 from pathlib import Path
 
 from eovrt_control.contracts.media import DetectionEvent
-from eovrt_control.perception.events import (
+from eovrt_labs.perception.events import (
     RawModelDetection,
     attach_epp_to_persons,
     build_detection_event,
     serialize_event,
 )
-from eovrt_control.perception.labels import normalize_gdino_label, normalize_yolo_label, to_canonical_label
-from eovrt_control.perception.normalizer import normalize_detections, postprocess_raw_detections
-from eovrt_control.perception.tracking import SimpleIoUTracker, iou
+from eovrt_labs.perception.labels import normalize_gdino_label, normalize_yolo_label, to_canonical_label
+from eovrt_labs.perception.normalizer import normalize_detections, postprocess_raw_detections
+from eovrt_labs.perception.tracking import SimpleIoUTracker, iou
 
 
 def test_normalize_yolo_labels():
@@ -90,7 +90,7 @@ def test_serialize_excludes_none_fields():
 
 
 def test_detection_event_matches_media_plane_contract_shape():
-    media_src = Path(__file__).resolve().parents[2] / "e-ovrt_media-plane" / "src"
+    media_src = Path(__file__).resolve().parents[3] / "e-ovrt_media-plane" / "src"
     if str(media_src) not in sys.path:
         sys.path.insert(0, str(media_src))
     from eovrt_media.contracts.events import DetectionEvent as MediaDetectionEvent
@@ -228,7 +228,7 @@ def test_postprocess_raw_detections_returns_contract_ready_boxes():
 
 
 def test_apply_person_tracking_assigns_stable_ids():
-    from eovrt_control.perception.tracking import apply_person_tracking
+    from eovrt_labs.perception.tracking import apply_person_tracking
 
     tracker = SimpleIoUTracker(iou_threshold=0.3)
     box_a = [10.0, 10.0, 60.0, 120.0]
@@ -247,7 +247,7 @@ def test_apply_person_tracking_assigns_stable_ids():
 
 
 def test_apply_person_tracking_preserves_detection_order():
-    from eovrt_control.perception.tracking import apply_person_tracking
+    from eovrt_labs.perception.tracking import apply_person_tracking
 
     tracker = SimpleIoUTracker()
     raw = [

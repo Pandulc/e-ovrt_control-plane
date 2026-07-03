@@ -57,7 +57,7 @@ def attach_epp_to_persons(
     epp_items: list[RawModelDetection],
 ) -> list[Detection]:
     """Asocia cascos/chalecos a personas y asigna detection_id derivado (utilidad legacy)."""
-    from eovrt_control.perception.tracking import (
+    from eovrt_labs.perception.tracking import (
         bbox_center,
         center_inside_region,
         person_torso_region,

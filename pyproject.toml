@@ -15,7 +15,7 @@ dev = [
     "pytest",
     "ruff",
 ]
-perception = [
+labs = [
     "torch",
     "torchvision",
     "transformers",
@@ -28,6 +28,7 @@ perception = [
 
 [project.scripts]
 eovrt-control = "eovrt_control.cli:app"
+eovrt-labs = "eovrt_labs.cli:app"
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

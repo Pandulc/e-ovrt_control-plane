@@ -1,78 +1,49 @@
-#!/usr/bin/env python3
-"""Genera detections.jsonl con un modelo HF/YOLO para probar el plano de control.
-
-Ejemplo (WSL, GPU):
-
-    cd e-ovrt_control-plane
-    source .venv/bin/activate
-    pip install -e ".[perception]"
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-
-    python scripts/generate_hf_detections.py \\
-      --input ../e-ovrt_datasets/datasets/raw/construction_ppe \\
-      --output fixtures/hf_media/construction_ppe/detections.jsonl \\
-      --backend yolo-ppe \\
-      --device cuda \\
-      --max-units 30
-
-    eovrt-control replay configs/replay_hf_detections.yaml
-"""
+"""CLI de labs: generacion de detecciones y visualizacion de alertas."""
 
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 
 import typer
+from rich.console import Console
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(ROOT / "src"))
+app = typer.Typer(help="E-OVRT labs: generacion de detecciones y visualizacion.")
+console = Console()
 
-from eovrt_control.perception.generator import (  # noqa: E402
-    GenerationConfig,
-    generate_detections_jsonl,
-)
 
-app = typer.Typer(add_completion=False, help="Genera detections.jsonl para replay del control plane.")
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def _parse_variants(raw: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
-@app.command()
-def main(
+@app.command("generate-detections")
+def generate_detections(
     input_path: Path = typer.Option(..., "--input", "-i", exists=True, readable=True),
     output: Path = typer.Option(
         Path("fixtures/hf_media/latest/detections.jsonl"),
         "--output",
         "-o",
-        help="Ruta del JSONL de salida (media.detection.v1).",
     ),
-    backend: str = typer.Option(
-        "yolo-ppe",
-        "--backend",
-        "-b",
-        help="Backend: yolo-ppe, yoloe o gdino.",
-    ),
-    model_id: str | None = typer.Option(
-        None,
-        "--model-id",
-        help="Override del modelo (ej. IDEA-Research/grounding-dino-tiny).",
-    ),
-    device: str = typer.Option("cuda", "--device", help="cuda o cpu."),
-    confidence: float = typer.Option(0.25, "--confidence", min=0.0, max=1.0),
-    person_confidence: float = typer.Option(0.35, "--person-confidence", min=0.0, max=1.0),
-    helmet_confidence: float = typer.Option(0.25, "--helmet-confidence", min=0.0, max=1.0),
-    vest_confidence: float = typer.Option(0.25, "--vest-confidence", min=0.0, max=1.0),
+    backend: str = typer.Option("yolo-ppe", "--backend", "-b"),
+    model_id: str | None = typer.Option(None, "--model-id"),
+    device: str = typer.Option("cuda", "--device"),
+    confidence: float = typer.Option(0.25, "--confidence"),
+    person_confidence: float = typer.Option(0.35, "--person-confidence"),
+    helmet_confidence: float = typer.Option(0.25, "--helmet-confidence"),
+    vest_confidence: float = typer.Option(0.25, "--vest-confidence"),
     min_box_area: float = typer.Option(100.0, "--min-box-area"),
     track: bool = typer.Option(
         False,
         "--track/--no-track",
-        help="IDs estables por IoU en personas; usar al evaluar persistencia temporal en video.",
+        help="IDs estables por IoU en personas (video/secuencias); recomendado para evaluar persistencia temporal.",
     ),
     track_iou_threshold: float = typer.Option(0.20, "--track-iou-threshold"),
     track_max_lost_ms: float = typer.Option(1500.0, "--track-max-lost-ms"),
@@ -99,16 +70,11 @@ def main(
         "--progress-every",
         help="Loguea avance cada N unidades procesadas. Usar 0 para desactivar progreso intermedio.",
     ),
-    max_units: int | None = typer.Option(None, "--max-units", help="Limite de frames/imagenes."),
+    max_units: int | None = typer.Option(None, "--max-units"),
     stride: int = typer.Option(1, "--stride", min=1),
     run_id: str | None = typer.Option(None, "--run-id"),
     source_id: str | None = typer.Option(None, "--source-id"),
     prompt_set_id: str | None = typer.Option(None, "--prompt-set-id"),
-    write_replay_config: Path | None = typer.Option(
-        None,
-        "--write-replay-config",
-        help="Escribe un YAML de replay apuntando al JSONL generado.",
-    ),
     draw_alerts_from: Path | None = typer.Option(
         None,
         "--draw-alert-frames-from",
@@ -129,7 +95,10 @@ def main(
     alert_frames_line_thickness: int = typer.Option(2, "--alert-frames-line-thickness"),
     alert_frames_details_csv: Path | None = typer.Option(None, "--alert-frames-details-csv"),
 ) -> None:
-    """Inferencia perceptual liviana → detections.jsonl compatible con el control plane."""
+    """Genera detections.jsonl con contrato media.detection.v1 completo."""
+    _configure_logging()
+    from eovrt_labs.perception.generator import GenerationConfig, generate_detections_jsonl
+
     result = generate_detections_jsonl(
         GenerationConfig(
             input_path=input_path,
@@ -171,50 +140,55 @@ def main(
             alert_frames_details_csv_path=alert_frames_details_csv,
         )
     )
-    typer.echo(f"run_id: {result.run_id}")
-    typer.echo(f"unidades: {result.units_written}")
-    typer.echo(f"salida: {result.output_path}")
+    console.print(f"run_id: {result.run_id}")
+    console.print(f"unidades: {result.units_written}")
+    console.print(f"salida: {result.output_path}")
     if result.alert_frames_output_dir is not None:
-        typer.echo(f"frames alertas: {result.alert_frames_output_dir}")
-        typer.echo(f"index alertas: {result.alert_frames_index_path}")
-        typer.echo(f"csv detalle alertas: {result.alert_frames_details_csv_path}")
-
-    if write_replay_config is not None:
-        replay_yaml = _render_replay_config(result.output_path, result.run_id)
-        write_replay_config.parent.mkdir(parents=True, exist_ok=True)
-        write_replay_config.write_text(replay_yaml, encoding="utf-8")
-        typer.echo(f"replay config: {write_replay_config}")
+        console.print(f"frames alertas: {result.alert_frames_output_dir}")
+        console.print(f"index alertas: {result.alert_frames_index_path}")
+        console.print(f"csv detalle alertas: {result.alert_frames_details_csv_path}")
 
 
-def _render_replay_config(detections_path: Path, run_id: str) -> str:
-    rel = detections_path.as_posix()
-    return f"""run:
-  id: {run_id}
-  scenario: DBE
-  name: replay_hf_detections
-  description: "Replay sobre detections.jsonl generado por scripts/generate_hf_detections.py"
+@app.command("draw-alert-frames")
+def draw_alert_frames_command(
+    video: Path = typer.Option(..., "--video", exists=True, readable=True),
+    alerts: Path = typer.Option(..., "--alerts", exists=True, readable=True),
+    output_dir: Path = typer.Option(
+        Path("alert_frame_previews"),
+        "--output-dir",
+    ),
+    stage: str = typer.Option(
+        "confirm",
+        "--stage",
+        help="Etapa a dibujar: confirm, candidate, both o all.",
+    ),
+    variants: str = typer.Option(
+        "",
+        "--variants",
+        help="Filtro opcional por variantes separadas por coma.",
+    ),
+    image_ext: str = typer.Option("jpg", "--image-ext"),
+    line_thickness: int = typer.Option(2, "--line-thickness"),
+    details_csv: Path | None = typer.Option(None, "--details-csv"),
+) -> None:
+    """Dibuja bboxes de alertas sobre frames del video fuente."""
+    from eovrt_labs.visualization.frame_drawing import AlertFrameConfig, draw_alert_frames
 
-input:
-  type: media_jsonl
-  path: {rel}
-
-patterns:
-  file: patterns/cr01_cr02_v1.yaml
-  active_ids:
-    - CR-01
-    - CR-02
-
-outputs:
-  base_dir: ../runs
-  save_pattern_events_jsonl: true
-  save_alerts_jsonl: true
-  save_metrics_jsonl: true
-  save_errors_jsonl: true
-  save_summary_json: true
-
-logging:
-  level: INFO
-"""
+    result = draw_alert_frames(
+        AlertFrameConfig(
+            video_path=video,
+            alerts_path=alerts,
+            output_dir=output_dir,
+            stage=stage,
+            variants=_parse_variants(variants),
+            image_ext=image_ext,
+            line_thickness=line_thickness,
+            details_csv_path=details_csv,
+        )
+    )
+    console.print(f"imagenes: {result.images_written}")
+    console.print(f"index: {result.index_path}")
+    console.print(f"csv detalle: {result.details_csv_path}")
 
 
 if __name__ == "__main__":
