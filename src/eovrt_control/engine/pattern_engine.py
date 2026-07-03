@@ -19,6 +19,10 @@ class PatternRuntimeState:
     clear_count: int = 0
     first_hit_timestamp_ms: float | None = None
     clear_started_timestamp_ms: float | None = None
+    last_seen_timestamp_ms: float | None = None
+    last_seen_frame: int | None = None
+    last_alert_timestamp_ms: float | None = None
+    last_alert_frame: int | None = None
 
 
 @dataclass(frozen=True)
@@ -55,13 +59,19 @@ class PatternEngine:
                     continue
                 pattern_events.append(change)
                 if change.state == "confirmed":
-                    alerts.append(self._make_alert(event, pattern, change))
+                    alert = self._maybe_alert(event, pattern, change)
+                    if alert is not None:
+                        alerts.append(alert)
 
             clear_subjects = result.observed_subject_keys - set(evidence_by_subject)
             for subject_key in clear_subjects:
                 change = self._advance_clear(event, pattern, subject_key)
                 if change is not None:
                     pattern_events.append(change)
+
+            pattern_events.extend(
+                self._expire_absent_subjects(event, pattern, result.observed_subject_keys)
+            )
 
         return PatternEngineResult(
             pattern_events=pattern_events,
@@ -80,6 +90,8 @@ class PatternEngine:
         key = (pattern.id, subject_key)
         runtime_state = self._state.setdefault(key, PatternRuntimeState())
         previous = runtime_state.state
+        runtime_state.last_seen_timestamp_ms = event.source.timestamp_ms
+        runtime_state.last_seen_frame = event.source.frame_index
 
         if runtime_state.state in {"inactive", "resolved"}:
             runtime_state.hit_count = 0
@@ -121,6 +133,9 @@ class PatternEngine:
         if runtime_state is None or runtime_state.state in {"inactive", "resolved"}:
             return None
 
+        runtime_state.last_seen_timestamp_ms = event.source.timestamp_ms
+        runtime_state.last_seen_frame = event.source.frame_index
+
         if runtime_state.clear_count == 0:
             runtime_state.clear_started_timestamp_ms = event.source.timestamp_ms
         if runtime_state.clear_started_timestamp_ms is None:
@@ -153,6 +168,75 @@ class PatternEngine:
         return self._make_state_event(
             event, pattern, subject_key, previous, "resolved", placeholder
         )
+
+    def _expire_absent_subjects(
+        self,
+        event: DetectionEvent,
+        pattern: PatternDefinition,
+        observed_subject_keys: set[str],
+    ) -> list[PatternStateChanged]:
+        """Resuelve sujetos activos que dejaron de observarse mas alla del timeout."""
+        timeout_ms = pattern.timing.subject_absent_timeout_ms
+        timeout_frames = pattern.timing.subject_absent_timeout_frames
+        if timeout_ms is None and timeout_frames is None:
+            return []
+
+        changes: list[PatternStateChanged] = []
+        for (pattern_id, subject_key), runtime_state in self._state.items():
+            if pattern_id != pattern.id or subject_key in observed_subject_keys:
+                continue
+            if runtime_state.state in {"inactive", "resolved"}:
+                continue
+            if not self._absence_exceeded(event, runtime_state, timeout_ms, timeout_frames):
+                continue
+
+            previous = runtime_state.state
+            runtime_state.state = "resolved"
+            runtime_state.hit_count = 0
+            runtime_state.clear_count = 0
+            runtime_state.first_hit_timestamp_ms = None
+            runtime_state.clear_started_timestamp_ms = None
+            placeholder = PatternEvidence(
+                pattern_id=pattern.id,
+                condition_id=pattern.condition_id,
+                subject_key=subject_key,
+                subject={
+                    "label": pattern.subject_class,
+                    "confidence": 0.0,
+                    "bbox_xyxy": [0.0, 0.0, 0.0, 0.0],
+                },
+                missing_class=pattern.required_absent_class,
+                supporting=[],
+                score=0.0,
+                rationale="El sujeto dejo de observarse antes de resolver la condicion.",
+            )
+            changes.append(
+                self._make_state_event(
+                    event, pattern, subject_key, previous, "resolved", placeholder
+                )
+            )
+        return changes
+
+    def _absence_exceeded(
+        self,
+        event: DetectionEvent,
+        runtime_state: PatternRuntimeState,
+        timeout_ms: float | None,
+        timeout_frames: int | None,
+    ) -> bool:
+        if (
+            timeout_ms is not None
+            and event.source.timestamp_ms is not None
+            and runtime_state.last_seen_timestamp_ms is not None
+        ):
+            return event.source.timestamp_ms - runtime_state.last_seen_timestamp_ms >= timeout_ms
+        if (
+            timeout_frames is not None
+            and event.source.frame_index is not None
+            and runtime_state.last_seen_frame is not None
+        ):
+            return event.source.frame_index - runtime_state.last_seen_frame >= timeout_frames
+        return False
 
     def _confirmation_met(
         self,
@@ -208,6 +292,46 @@ class PatternEngine:
             frame_index=event.source.frame_index,
             timestamp_ms=event.source.timestamp_ms,
         )
+
+    def _maybe_alert(
+        self,
+        event: DetectionEvent,
+        pattern: PatternDefinition,
+        change: PatternStateChanged,
+    ) -> AlertEvent | None:
+        """Emite alerta salvo que un cooldown activo la suprima; registra la ultima."""
+        runtime_state = self._state.get((pattern.id, change.subject_key))
+        if runtime_state is not None and not self._cooldown_ok(event, pattern, runtime_state):
+            return None
+        alert = self._make_alert(event, pattern, change)
+        if runtime_state is not None:
+            runtime_state.last_alert_timestamp_ms = event.source.timestamp_ms
+            runtime_state.last_alert_frame = event.source.frame_index
+        return alert
+
+    def _cooldown_ok(
+        self,
+        event: DetectionEvent,
+        pattern: PatternDefinition,
+        runtime_state: PatternRuntimeState,
+    ) -> bool:
+        cooldown_ms = pattern.timing.realert_cooldown_ms
+        cooldown_frames = pattern.timing.realert_cooldown_frames
+        if cooldown_ms is None and cooldown_frames is None:
+            return True
+        if (
+            cooldown_ms is not None
+            and event.source.timestamp_ms is not None
+            and runtime_state.last_alert_timestamp_ms is not None
+        ):
+            return event.source.timestamp_ms - runtime_state.last_alert_timestamp_ms >= cooldown_ms
+        if (
+            cooldown_frames is not None
+            and event.source.frame_index is not None
+            and runtime_state.last_alert_frame is not None
+        ):
+            return event.source.frame_index - runtime_state.last_alert_frame >= cooldown_frames
+        return True
 
     def _make_alert(
         self,

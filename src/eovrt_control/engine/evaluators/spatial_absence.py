@@ -64,6 +64,42 @@ def _center_inside_region(detection: Detection, region: list[float]) -> bool:
     return x1 <= cx <= x2 and y1 <= cy <= y2
 
 
+def _region_center(region: list[float]) -> tuple[float, float]:
+    x1, y1, x2, y2 = region
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
+def _sq_distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> float:
+    return (point_a[0] - point_b[0]) ** 2 + (point_a[1] - point_b[1]) ** 2
+
+
+def _match_epp_to_subjects(
+    regions: list[list[float]],
+    required_items: list[Detection],
+) -> set[int]:
+    """Asigna cada EPP a lo sumo a una persona (greedy por cercania) y devuelve los
+    indices de sujeto que quedaron cubiertos por algun EPP asociado."""
+
+    pairs: list[tuple[float, int, int]] = []
+    for subject_index, region in enumerate(regions):
+        region_center = _region_center(region)
+        for item_index, item in enumerate(required_items):
+            if not _center_inside_region(item, region):
+                continue
+            distance = _sq_distance(_bbox_center(item.bbox_xyxy), region_center)
+            pairs.append((distance, subject_index, item_index))
+
+    pairs.sort()
+    covered: set[int] = set()
+    used_items: set[int] = set()
+    for _, subject_index, item_index in pairs:
+        if subject_index in covered or item_index in used_items:
+            continue
+        covered.add(subject_index)
+        used_items.add(item_index)
+    return covered
+
+
 def _evidence_ref(detection: Detection) -> EvidenceRef:
     return EvidenceRef(
         detection_id=detection.detection_id,
@@ -98,17 +134,16 @@ def evaluate_spatial_absence(
         and detection.confidence >= pattern.evidence.min_absent_class_confidence
     ]
 
+    regions = [_region_bbox(subject.bbox_xyxy, pattern) for subject in subjects]
+    covered = _match_epp_to_subjects(regions, required_items)
+
     evidences: list[PatternEvidence] = []
     observed_subject_keys: set[str] = set()
 
     for index, subject in enumerate(subjects):
         subject_key = _subject_key(event, pattern, index, subject)
         observed_subject_keys.add(subject_key)
-        region = _region_bbox(subject.bbox_xyxy, pattern)
-        associated_items = [
-            item for item in required_items if _center_inside_region(item, region)
-        ]
-        if associated_items:
+        if index in covered:
             continue
 
         evidences.append(

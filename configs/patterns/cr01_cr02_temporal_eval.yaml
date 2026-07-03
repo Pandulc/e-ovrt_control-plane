@@ -24,6 +24,10 @@ pattern_set:
         resolve_after_frames: 2
         confirm_after_ms: 1000.0
         resolve_after_ms: 500.0
+        subject_absent_timeout_frames: 6
+        subject_absent_timeout_ms: 3000.0
+        realert_cooldown_frames: 10
+        realert_cooldown_ms: 5000.0
 
     - id: CR-02
       name: person_without_vest
@@ -47,3 +51,7 @@ pattern_set:
         resolve_after_frames: 2
         confirm_after_ms: 1000.0
         resolve_after_ms: 500.0
+        subject_absent_timeout_frames: 6
+        subject_absent_timeout_ms: 3000.0
+        realert_cooldown_frames: 10
+        realert_cooldown_ms: 5000.0

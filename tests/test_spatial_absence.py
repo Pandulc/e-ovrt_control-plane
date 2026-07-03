@@ -61,3 +61,40 @@ def test_associated_helmet_suppresses_cr01_evidence() -> None:
 
     assert result.evidences == []
 
+
+def test_shared_epp_covers_only_closest_person() -> None:
+    # Un unico casco cuyo centro cae en la region de dos personas superpuestas
+    # solo debe cubrir a la mas cercana; la otra genera evidencia (asociacion 1:1).
+    patterns = load_patterns_file("configs/patterns/cr01_cr02_v1.yaml")
+    pattern = patterns.active_patterns(["CR-01"])[0]
+    event = _event(
+        [
+            Detection(
+                detection_id="pA",
+                label="person",
+                prompt_id="person",
+                confidence=0.9,
+                bbox_xyxy=[100, 100, 300, 500],
+            ),
+            Detection(
+                detection_id="pB",
+                label="person",
+                prompt_id="person",
+                confidence=0.9,
+                bbox_xyxy=[150, 100, 350, 500],
+            ),
+            Detection(
+                detection_id="h1",
+                label="helmet",
+                prompt_id="helmet",
+                confidence=0.8,
+                bbox_xyxy=[180, 130, 220, 170],
+            ),
+        ]
+    )
+
+    result = evaluate_spatial_absence(event, pattern)
+
+    assert len(result.evidences) == 1
+    assert result.evidences[0].subject.detection_id == "pB"
+

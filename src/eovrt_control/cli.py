@@ -31,6 +31,8 @@ def replay(config: Path) -> None:
     console.print(f"Unidades procesadas: {summary.units_processed}")
     console.print(f"Alertas: {summary.alerts_count}")
     console.print(f"Resumen: {summary.output_files['summary']}")
+    for warning in summary.warnings:
+        console.print(f"[yellow]Advertencia:[/yellow] {warning}")
 
 
 @app.command("evaluate-alerts")

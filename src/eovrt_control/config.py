@@ -39,6 +39,12 @@ class PatternTimingConfig(BaseModel):
     resolve_after_frames: int = 1
     confirm_after_ms: float | None = None
     resolve_after_ms: float | None = None
+    # Expiracion de sujetos que dejan de observarse (opt-in; None desactiva).
+    subject_absent_timeout_frames: int | None = None
+    subject_absent_timeout_ms: float | None = None
+    # Cooldown de re-alerta por (patron, sujeto) tras un ciclo resolved->confirmed.
+    realert_cooldown_frames: int | None = None
+    realert_cooldown_ms: float | None = None
 
 
 class PatternDefinition(BaseModel):

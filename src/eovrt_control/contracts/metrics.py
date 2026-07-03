@@ -34,6 +34,7 @@ class RunSummary(BaseModel):
     errors_count: int
     avg_processing_ms: float
     output_files: dict[str, str]
+    warnings: list[str] = Field(default_factory=list)
     started_at: str
     finished_at: str
 

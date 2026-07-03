@@ -117,3 +117,77 @@ def test_engine_uses_elapsed_time_for_resolution() -> None:
 
     assert first_clear.pattern_events == []
     assert [event.state for event in second_clear.pattern_events] == ["resolved"]
+
+
+def _empty_event(timestamp_ms: float, frame_index: int) -> DetectionEvent:
+    return DetectionEvent(
+        run_id="media-run",
+        unit_id=f"unit-{frame_index}",
+        source={
+            "source_id": "video.mp4",
+            "source_type": "video_frame",
+            "frame_index": frame_index,
+            "timestamp_ms": timestamp_ms,
+            "width": 640,
+            "height": 480,
+        },
+        model={"name": "mock", "device": "cpu"},
+        prompts={"prompt_set_id": "cr01_cr02_v1"},
+        detections=[],
+    )
+
+
+def _lifecycle_pattern(**timing_overrides) -> PatternDefinition:
+    timing = {"confirm_after_frames": 1, "resolve_after_frames": 1}
+    timing.update(timing_overrides)
+    return PatternDefinition.model_validate(
+        {
+            "id": "CR-01",
+            "name": "person_without_helmet",
+            "condition_id": "CR-01",
+            "subject_class": "person",
+            "required_absent_class": "helmet",
+            "region": {
+                "type": "upper_body",
+                "y_min_ratio": 0.0,
+                "y_max_ratio": 0.45,
+                "x_margin_ratio": 0.12,
+            },
+            "timing": timing,
+        }
+    )
+
+
+def test_engine_expires_absent_subject() -> None:
+    engine = PatternEngine(
+        control_run_id="control-run",
+        patterns=[_lifecycle_pattern(subject_absent_timeout_ms=1000.0)],
+    )
+
+    first = engine.process(_event_at(0.0, 0))
+    assert [event.state for event in first.pattern_events] == ["confirmed"]
+    assert len(first.alerts) == 1
+
+    still_present = engine.process(_empty_event(500.0, 1))
+    assert still_present.pattern_events == []
+
+    expired = engine.process(_empty_event(1000.0, 2))
+    assert [event.state for event in expired.pattern_events] == ["resolved"]
+    assert expired.alerts == []
+
+
+def test_engine_realert_cooldown_suppresses_reconfirm_alert() -> None:
+    engine = PatternEngine(
+        control_run_id="control-run",
+        patterns=[_lifecycle_pattern(realert_cooldown_ms=5000.0)],
+    )
+
+    first = engine.process(_event_at(0.0, 0))
+    assert len(first.alerts) == 1
+
+    resolved = engine.process(_event_at(500.0, 1, has_helmet=True))
+    assert [event.state for event in resolved.pattern_events] == ["resolved"]
+
+    reconfirm = engine.process(_event_at(1000.0, 2))
+    assert [event.state for event in reconfirm.pattern_events] == ["confirmed"]
+    assert reconfirm.alerts == []
