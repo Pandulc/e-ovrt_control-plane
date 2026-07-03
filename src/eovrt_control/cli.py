@@ -25,6 +25,10 @@ def _configure_logging() -> None:
     )
 
 
+def _parse_variants(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 @app.command()
 def validate_config(config: Path) -> None:
     """Valida una configuracion de replay."""
@@ -66,6 +70,75 @@ def evaluate_alerts(
     console.print(f"F1: {evaluation.f1:.3f}")
     if output is not None:
         console.print(f"Evaluacion: {output}")
+
+
+@app.command("export-alerts-csv")
+def export_alerts_csv(
+    alerts: Path = typer.Option(..., "--alerts", exists=True, readable=True),
+    output: Path = typer.Option(..., "--output", "-o"),
+    stage: str = typer.Option(
+        "all",
+        "--stage",
+        help="Etapa a exportar: confirm, candidate, both o all.",
+    ),
+    variants: str = typer.Option(
+        "",
+        "--variants",
+        help="Filtro opcional por variantes separadas por coma.",
+    ),
+) -> None:
+    """Exporta alertas CSV/JSONL a un CSV normalizado con bbox y condicion."""
+    from eovrt_control.visualization.alert_frames import export_alert_details_csv
+
+    output_path = export_alert_details_csv(
+        alerts,
+        output,
+        stage=stage,
+        variants=_parse_variants(variants),
+    )
+    console.print(f"CSV de alertas: {output_path}")
+
+
+@app.command("draw-alert-frames")
+def draw_alert_frames_command(
+    video: Path = typer.Option(..., "--video", exists=True, readable=True),
+    alerts: Path = typer.Option(..., "--alerts", exists=True, readable=True),
+    output_dir: Path = typer.Option(
+        Path("alert_frame_previews"),
+        "--output-dir",
+    ),
+    stage: str = typer.Option(
+        "confirm",
+        "--stage",
+        help="Etapa a dibujar: confirm, candidate, both o all.",
+    ),
+    variants: str = typer.Option(
+        "",
+        "--variants",
+        help="Filtro opcional por variantes separadas por coma.",
+    ),
+    image_ext: str = typer.Option("jpg", "--image-ext"),
+    line_thickness: int = typer.Option(2, "--line-thickness"),
+    details_csv: Path | None = typer.Option(None, "--details-csv"),
+) -> None:
+    """Dibuja bboxes de alertas sobre frames del video fuente."""
+    from eovrt_control.visualization.alert_frames import AlertFrameConfig, draw_alert_frames
+
+    result = draw_alert_frames(
+        AlertFrameConfig(
+            video_path=video,
+            alerts_path=alerts,
+            output_dir=output_dir,
+            stage=stage,
+            variants=_parse_variants(variants),
+            image_ext=image_ext,
+            line_thickness=line_thickness,
+            details_csv_path=details_csv,
+        )
+    )
+    console.print(f"imagenes: {result.images_written}")
+    console.print(f"index: {result.index_path}")
+    console.print(f"csv detalle: {result.details_csv_path}")
 
 
 @app.command("generate-detections")
@@ -119,6 +192,25 @@ def generate_detections(
     run_id: str | None = typer.Option(None, "--run-id"),
     source_id: str | None = typer.Option(None, "--source-id"),
     prompt_set_id: str | None = typer.Option(None, "--prompt-set-id"),
+    draw_alerts_from: Path | None = typer.Option(
+        None,
+        "--draw-alert-frames-from",
+        help="CSV/JSONL de alertas para dibujar frames al finalizar la generacion.",
+    ),
+    alert_frames_output_dir: Path | None = typer.Option(None, "--alert-frames-output-dir"),
+    alert_frames_stage: str = typer.Option(
+        "confirm",
+        "--alert-frames-stage",
+        help="Etapa a dibujar: confirm, candidate, both o all.",
+    ),
+    alert_frames_variants: str = typer.Option(
+        "",
+        "--alert-frames-variants",
+        help="Filtro opcional por variantes separadas por coma.",
+    ),
+    alert_frames_image_ext: str = typer.Option("jpg", "--alert-frames-image-ext"),
+    alert_frames_line_thickness: int = typer.Option(2, "--alert-frames-line-thickness"),
+    alert_frames_details_csv: Path | None = typer.Option(None, "--alert-frames-details-csv"),
 ) -> None:
     """Genera detections.jsonl con contrato media.detection.v1 completo."""
     _configure_logging()
@@ -156,11 +248,22 @@ def generate_detections(
             run_id=run_id,
             source_id=source_id,
             prompt_set_id=prompt_set_id,
+            alert_frames_alerts_path=draw_alerts_from,
+            alert_frames_output_dir=alert_frames_output_dir,
+            alert_frames_stage=alert_frames_stage,
+            alert_frames_variants=_parse_variants(alert_frames_variants),
+            alert_frames_image_ext=alert_frames_image_ext,
+            alert_frames_line_thickness=alert_frames_line_thickness,
+            alert_frames_details_csv_path=alert_frames_details_csv,
         )
     )
     console.print(f"run_id: {result.run_id}")
     console.print(f"unidades: {result.units_written}")
     console.print(f"salida: {result.output_path}")
+    if result.alert_frames_output_dir is not None:
+        console.print(f"frames alertas: {result.alert_frames_output_dir}")
+        console.print(f"index alertas: {result.alert_frames_index_path}")
+        console.print(f"csv detalle alertas: {result.alert_frames_details_csv_path}")
 
 
 if __name__ == "__main__":

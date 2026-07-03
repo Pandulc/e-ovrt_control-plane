@@ -13,6 +13,7 @@ from eovrt_control.engine.pattern_engine import PatternEngine
 from eovrt_control.sinks.artifacts import RunArtifacts
 from eovrt_control.sinks.jsonl import JsonlSink
 from eovrt_control.sources.media_jsonl import iter_media_jsonl
+from eovrt_control.visualization.alert_frames import export_alert_details_csv
 
 
 def _utc_now() -> str:
@@ -105,6 +106,8 @@ def run_replay(config_path: str | Path) -> RunSummary:
                     )
                 )
 
+    export_alert_details_csv(artifacts.alerts_path, artifacts.alerts_csv_path)
+
     summary = RunSummary(
         control_run_id=control_run_id,
         media_run_ids=sorted(media_run_ids),
@@ -121,6 +124,7 @@ def run_replay(config_path: str | Path) -> RunSummary:
             "effective_config": str(artifacts.effective_config_path),
             "pattern_events": str(artifacts.pattern_events_path),
             "alerts": str(artifacts.alerts_path),
+            "alerts_csv": str(artifacts.alerts_csv_path),
             "metrics": str(artifacts.metrics_path),
             "errors": str(artifacts.errors_path),
             "summary": str(artifacts.summary_path),

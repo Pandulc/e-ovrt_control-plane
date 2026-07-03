@@ -25,6 +25,10 @@ class RunArtifacts:
         return self.run_dir / "alerts.jsonl"
 
     @property
+    def alerts_csv_path(self) -> Path:
+        return self.run_dir / "alerts.csv"
+
+    @property
     def metrics_path(self) -> Path:
         return self.run_dir / "metrics.jsonl"
 

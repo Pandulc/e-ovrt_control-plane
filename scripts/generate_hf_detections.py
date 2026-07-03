@@ -39,6 +39,10 @@ app = typer.Typer(add_completion=False, help="Genera detections.jsonl para repla
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 
+def _parse_variants(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 @app.command()
 def main(
     input_path: Path = typer.Option(..., "--input", "-i", exists=True, readable=True),
@@ -105,6 +109,25 @@ def main(
         "--write-replay-config",
         help="Escribe un YAML de replay apuntando al JSONL generado.",
     ),
+    draw_alerts_from: Path | None = typer.Option(
+        None,
+        "--draw-alert-frames-from",
+        help="CSV/JSONL de alertas para dibujar frames al finalizar la generacion.",
+    ),
+    alert_frames_output_dir: Path | None = typer.Option(None, "--alert-frames-output-dir"),
+    alert_frames_stage: str = typer.Option(
+        "confirm",
+        "--alert-frames-stage",
+        help="Etapa a dibujar: confirm, candidate, both o all.",
+    ),
+    alert_frames_variants: str = typer.Option(
+        "",
+        "--alert-frames-variants",
+        help="Filtro opcional por variantes separadas por coma.",
+    ),
+    alert_frames_image_ext: str = typer.Option("jpg", "--alert-frames-image-ext"),
+    alert_frames_line_thickness: int = typer.Option(2, "--alert-frames-line-thickness"),
+    alert_frames_details_csv: Path | None = typer.Option(None, "--alert-frames-details-csv"),
 ) -> None:
     """Inferencia perceptual liviana → detections.jsonl compatible con el control plane."""
     result = generate_detections_jsonl(
@@ -139,11 +162,22 @@ def main(
             run_id=run_id,
             source_id=source_id,
             prompt_set_id=prompt_set_id,
+            alert_frames_alerts_path=draw_alerts_from,
+            alert_frames_output_dir=alert_frames_output_dir,
+            alert_frames_stage=alert_frames_stage,
+            alert_frames_variants=_parse_variants(alert_frames_variants),
+            alert_frames_image_ext=alert_frames_image_ext,
+            alert_frames_line_thickness=alert_frames_line_thickness,
+            alert_frames_details_csv_path=alert_frames_details_csv,
         )
     )
     typer.echo(f"run_id: {result.run_id}")
     typer.echo(f"unidades: {result.units_written}")
     typer.echo(f"salida: {result.output_path}")
+    if result.alert_frames_output_dir is not None:
+        typer.echo(f"frames alertas: {result.alert_frames_output_dir}")
+        typer.echo(f"index alertas: {result.alert_frames_index_path}")
+        typer.echo(f"csv detalle alertas: {result.alert_frames_details_csv_path}")
 
     if write_replay_config is not None:
         replay_yaml = _render_replay_config(result.output_path, result.run_id)

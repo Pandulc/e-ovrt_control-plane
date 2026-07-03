@@ -19,6 +19,11 @@ from eovrt_control.contracts.media import DetectionEvent
 from eovrt_control.perception.normalizer import normalize_detections, postprocess_raw_detections
 from eovrt_control.perception.tracking import SimpleIoUTracker, apply_person_tracking
 from eovrt_control.perception.weights import DEFAULT_YOLOE_MODEL_ID, DEFAULT_WEIGHTS_FILENAME
+from eovrt_control.visualization.alert_frames import (
+    AlertFrameConfig,
+    AlertFrameResult,
+    draw_alert_frames,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,13 @@ class GenerationConfig:
     run_id: str | None = None
     source_id: str | None = None
     prompt_set_id: str | None = None
+    alert_frames_alerts_path: Path | None = None
+    alert_frames_output_dir: Path | None = None
+    alert_frames_stage: str = "confirm"
+    alert_frames_variants: tuple[str, ...] = ()
+    alert_frames_image_ext: str = "jpg"
+    alert_frames_line_thickness: int = 2
+    alert_frames_details_csv_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +79,10 @@ class GenerationResult:
     output_path: Path
     units_written: int
     source_type: str
+    alert_frames_output_dir: Path | None = None
+    alert_frames_index_path: Path | None = None
+    alert_frames_details_csv_path: Path | None = None
+    alert_frame_images_written: int = 0
 
 
 def _default_model_id(backend: str) -> str:
@@ -520,9 +536,48 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
         source_type,
         output_path,
     )
+    alert_frame_result: AlertFrameResult | None = None
+    if config.alert_frames_alerts_path is not None:
+        if input_path.suffix.lower() not in VIDEO_EXTENSIONS:
+            raise ValueError("La visualizacion de alertas requiere que --input sea un video.")
+        alert_output_dir = config.alert_frames_output_dir or output_path.parent / "alert_frame_previews"
+        logger.info(
+            "Dibujando frames de alertas: alerts=%s output_dir=%s stage=%s",
+            config.alert_frames_alerts_path,
+            alert_output_dir,
+            config.alert_frames_stage,
+        )
+        alert_frame_result = draw_alert_frames(
+            AlertFrameConfig(
+                video_path=input_path,
+                alerts_path=config.alert_frames_alerts_path,
+                output_dir=alert_output_dir,
+                stage=config.alert_frames_stage,
+                variants=config.alert_frames_variants,
+                image_ext=config.alert_frames_image_ext,
+                line_thickness=config.alert_frames_line_thickness,
+                details_csv_path=config.alert_frames_details_csv_path,
+            )
+        )
+        logger.info(
+            "Frames de alertas listos: imagenes=%s index=%s details_csv=%s",
+            alert_frame_result.images_written,
+            alert_frame_result.index_path,
+            alert_frame_result.details_csv_path,
+        )
     return GenerationResult(
         run_id=run_id,
         output_path=output_path,
         units_written=units_written,
         source_type=source_type,
+        alert_frames_output_dir=(
+            None if alert_frame_result is None else alert_frame_result.output_dir
+        ),
+        alert_frames_index_path=None if alert_frame_result is None else alert_frame_result.index_path,
+        alert_frames_details_csv_path=(
+            None if alert_frame_result is None else alert_frame_result.details_csv_path
+        ),
+        alert_frame_images_written=0
+        if alert_frame_result is None
+        else alert_frame_result.images_written,
     )

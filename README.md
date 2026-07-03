@@ -68,6 +68,34 @@ eovrt-control replay configs/replay_hf_detections.yaml
 
 Ver `fixtures/hf_media/README.md` y `scripts/generate_hf_detections.py`.
 
+## Visualizacion de alertas sobre video
+
+Cada `replay` ahora deja, ademas de `alerts.jsonl`, un `alerts.csv` normalizado con bbox,
+condicion de riesgo, severidad, sujeto, clase ausente y rationale. Ese CSV puede usarse
+directamente para revisar frames:
+
+```bash
+eovrt-control draw-alert-frames \
+  --video path/al/video.mp4 \
+  --alerts runs/<control_run>/alerts.csv \
+  --output-dir runs/<control_run>/visual_alerts \
+  --stage confirm
+```
+
+Tambien se aceptan `alerts.jsonl`, `pattern_events.jsonl` y CSVs tipo
+`alerts_focus_*.csv` con columnas `candidate_*`/`confirm_*`:
+
+```bash
+python utils/draw_alert_frames.py \
+  --video path/al/video.mp4 \
+  --alerts /tmp/matriz/alerts_focus.csv \
+  --output-dir /tmp/matriz/visual_alerts \
+  --stage both \
+  --variants baseline,balanced_vest_association,conservative
+```
+
+La salida incluye imagenes anotadas, `index.csv` y `alerts_details.csv`.
+
 Generar fixtures sinteticos manuales:
 
 ```bash
