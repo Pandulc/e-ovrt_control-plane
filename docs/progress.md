@@ -27,6 +27,14 @@
 - Se migro la persistencia temporal del motor a ventanas por `timestamp_ms`, manteniendo fallback por frames.
 - Se explicito que el plano de control no realiza tracking; la identidad estable debe venir del plano de medios o de fixtures preparados.
 
+## 2026-07-02
+
+- Se reorganizo el repo: nucleo `eovrt_control` (liviano, `eovrt-control`) separado de las herramientas experimentales `eovrt_labs` (`eovrt-labs`, extra `.[labs]`). El generador de detecciones y la visualizacion de alertas sobre video pasaron a labs; el export de `alerts.csv` quedo en el nucleo. El plano de control ya se instala/ejecuta sin torch ni OpenCV.
+- Se podo el CLI del generador a los parametros esenciales y se movio el ajuste fino a un YAML opcional (`--tuning`, ver `configs/tuning/example.yaml`). `gdino` pasa a ser el backend por defecto (mejor deteccion que yolo-ppe en las pruebas). Se elimino el sistema de "variants"/`alerts_focus_*.csv` y la integracion de dibujado embebida en el generador.
+- Se unifico la semantica de `stride`/`max_units` entre carpeta de imagenes y video, y se elimino la doble serializacion por unidad en el generador.
+- Motor de patrones: asociacion EPP<->persona 1:1 por cercania, expiracion opcional de sujetos ausentes y cooldown opcional de re-alerta. Nuevo warning cuando la persistencia temporal no puede operar por falta de ids estables.
+- Se agregaron pruebas de las tres mejoras del motor y de la carga de tuning; el fixture sintetico sigue dando F1 = 1.0.
+
 ## Pendiente inmediato
 
 - Ejecutar replay con artefactos reales del plano de medios.
