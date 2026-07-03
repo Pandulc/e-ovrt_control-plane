@@ -1,0 +1,25 @@
+# Parametros finos de deteccion y tracking para `eovrt-labs generate-detections --tuning`.
+# Todas las claves son opcionales; las omitidas usan el default indicado.
+# Uso: eovrt-labs generate-detections -i <video> --backend gdino --track --tuning configs/tuning/example.yaml
+
+# --- Deteccion / postproceso ---
+person_confidence: 0.35            # umbral de confianza para personas
+helmet_confidence: 0.25            # umbral de confianza para cascos
+vest_confidence: 0.25             # umbral de confianza para chalecos
+min_box_area_px: 100.0            # area minima de caja (px^2) para conservar una deteccion
+nms_iou_person: 0.65             # IoU de NMS entre personas
+nms_iou_epp: 0.50                # IoU de NMS entre EPP (casco/chaleco)
+model_iou: 0.50                  # IoU interno del modelo (YOLO/YOLOE)
+image_size: 640                  # tamano de inferencia (lado mayor)
+image_folder_frame_interval_ms: 500.0  # separacion temporal asumida entre imagenes de una carpeta
+
+# --- Tracking de personas (solo con --track) ---
+track_iou_threshold: 0.20
+track_max_lost_ms: 1500.0
+track_max_lost_frames: 30
+track_center_gate_ratio: 0.75
+track_area_ratio_min: 0.35
+track_min_score: 0.25
+track_appearance: true            # firma visual liviana del torso para sostener IDs
+track_appearance_weight: 0.45
+track_appearance_min_similarity: 0.30

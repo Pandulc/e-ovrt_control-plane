@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-STAGE_CHOICES = ("confirm", "candidate", "both", "all")
-
 DETAIL_FIELDNAMES = [
     "variant",
     "stage",
@@ -94,10 +92,6 @@ def parse_int(value: Any) -> int | None:
     return int(float(value))
 
 
-def wanted_variants(raw_filter: str) -> tuple[str, ...]:
-    return tuple(item.strip() for item in raw_filter.split(",") if item.strip())
-
-
 def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         value = mapping.get(key)
@@ -147,19 +141,14 @@ def _second_from_time(timestamp_ms: float | None, second: float | None) -> float
     return timestamp_ms / 1000.0
 
 
-def read_alert_annotations(
-    path: str | Path,
-    stage: str = "confirm",
-    variants: tuple[str, ...] | set[str] = (),
-) -> list[Annotation]:
+def read_alert_annotations(path: str | Path, stage: str = "confirm") -> list[Annotation]:
     path = Path(path)
-    variant_set = set(variants)
     if path.suffix.lower() == ".jsonl":
-        return _read_jsonl_annotations(path, stage, variant_set)
-    return _read_csv_annotations(path, stage, variant_set)
+        return _read_jsonl_annotations(path, stage)
+    return _read_csv_annotations(path, stage)
 
 
-def _read_csv_annotations(path: Path, stage: str, variants: set[str]) -> list[Annotation]:
+def _read_csv_annotations(path: Path, stage: str) -> list[Annotation]:
     with path.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh)
         if reader.fieldnames is None:
@@ -168,13 +157,7 @@ def _read_csv_annotations(path: Path, stage: str, variants: set[str]) -> list[An
 
     annotations: list[Annotation] = []
     for row_index, row in enumerate(rows, start=1):
-        variant = str(_first_value(row, "variant", "control_run_id", "run_id") or "unknown")
-        if variants and variant not in variants:
-            continue
-
-        if "confirm_frame" in row or "candidate_frame" in row:
-            stages = _stage_values(stage) or ("candidate", "confirm")
-        elif "stage" in row or "state" in row:
+        if "stage" in row or "state" in row:
             row_stage = _state_to_stage(_first_value(row, "stage", "state"))
             stages = (row_stage,) if _stage_is_wanted(row_stage, stage) else ()
         elif stage == "candidate":
@@ -195,32 +178,24 @@ def _csv_row_to_annotation(
     stage: str,
     row_index: int,
 ) -> Annotation | None:
-    if "confirm_frame" in row or "candidate_frame" in row:
-        frame_value = _first_value(row, f"{stage}_frame", f"{stage}_frame_index")
-        second_value = _first_value(row, f"{stage}_second", f"{stage}_timestamp_s")
-        timestamp_ms_value = _first_value(row, f"{stage}_timestamp_ms")
-        bbox_value = _first_value(row, f"{stage}_bbox", f"{stage}_bbox_xyxy")
-        orientation = str(_first_value(row, f"{stage}_orientation", "orientation") or "")
-        confidence_value = _first_value(row, f"{stage}_confidence", "confirm_confidence", "confidence")
-    else:
-        frame_value = _first_value(row, "frame_index", "frame", "frame_id")
-        second_value = _first_value(row, "second", "timestamp_s")
-        timestamp_ms_value = _first_value(row, "timestamp_ms")
-        bbox_value = _first_value(
-            row,
-            "bbox_xyxy",
-            "bbox",
-            "subject_bbox",
-            "subject_bbox_xyxy",
-            "risk_bbox",
-        )
-        orientation = str(_first_value(row, "orientation") or "")
-        confidence_value = _first_value(
-            row,
-            "confidence",
-            "subject_confidence",
-            "confirm_confidence",
-        )
+    frame_value = _first_value(row, "frame_index", "frame", "frame_id")
+    second_value = _first_value(row, "second", "timestamp_s")
+    timestamp_ms_value = _first_value(row, "timestamp_ms")
+    bbox_value = _first_value(
+        row,
+        "bbox_xyxy",
+        "bbox",
+        "subject_bbox",
+        "subject_bbox_xyxy",
+        "risk_bbox",
+    )
+    orientation = str(_first_value(row, "orientation") or "")
+    confidence_value = _first_value(
+        row,
+        "confidence",
+        "subject_confidence",
+        "confirm_confidence",
+    )
 
     frame_index = parse_int(frame_value)
     bbox = parse_bbox(bbox_value)
@@ -282,7 +257,7 @@ def _split_tuple(value: Any) -> tuple[str, ...]:
     return tuple(part.strip() for part in str(value).split(";") if part.strip())
 
 
-def _read_jsonl_annotations(path: Path, stage: str, variants: set[str]) -> list[Annotation]:
+def _read_jsonl_annotations(path: Path, stage: str) -> list[Annotation]:
     annotations: list[Annotation] = []
     with path.open("r", encoding="utf-8") as fh:
         for row_index, line in enumerate(fh, start=1):
@@ -292,8 +267,6 @@ def _read_jsonl_annotations(path: Path, stage: str, variants: set[str]) -> list[
             payload = json.loads(stripped)
             annotation = _json_event_to_annotation(payload, row_index)
             if annotation is None:
-                continue
-            if variants and annotation.variant not in variants:
                 continue
             if not _stage_is_wanted(annotation.stage, stage):
                 continue
@@ -319,8 +292,6 @@ def _json_event_to_annotation(payload: dict[str, Any], row_index: int) -> Annota
 
     timestamp_ms = parse_float(payload.get("timestamp_ms"))
     stage = _state_to_stage(payload.get("state"), event_type=event_type)
-    if event_type == "pattern_state_changed":
-        stage = _state_to_stage(payload.get("state"), event_type=event_type)
 
     supporting = evidence.get("supporting") or []
     supporting_labels: list[str] = []
@@ -416,7 +387,6 @@ def export_alert_details_csv(
     output_path: str | Path,
     *,
     stage: str = "all",
-    variants: tuple[str, ...] | set[str] = (),
 ) -> Path:
-    annotations = read_alert_annotations(alerts_path, stage=stage, variants=variants)
+    annotations = read_alert_annotations(alerts_path, stage=stage)
     return write_alert_details_csv(annotations, Path(output_path))

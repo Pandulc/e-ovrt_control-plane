@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,17 +18,21 @@ from eovrt_labs.perception.events import build_detection_event, serialize_event
 from eovrt_control.contracts.media import DetectionEvent
 from eovrt_labs.perception.normalizer import normalize_detections, postprocess_raw_detections
 from eovrt_labs.perception.tracking import SimpleIoUTracker, apply_person_tracking
+from eovrt_labs.perception.tuning import TuningConfig, load_tuning_config
 from eovrt_labs.perception.weights import DEFAULT_YOLOE_MODEL_ID, DEFAULT_WEIGHTS_FILENAME
-from eovrt_labs.visualization.frame_drawing import (
-    AlertFrameConfig,
-    AlertFrameResult,
-    draw_alert_frames,
-)
 
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+
+__all__ = [
+    "GenerationConfig",
+    "GenerationResult",
+    "TuningConfig",
+    "generate_detections_jsonl",
+    "load_tuning_config",
+]
 
 
 @dataclass(frozen=True)
@@ -39,38 +43,15 @@ class GenerationConfig:
     model_id: str | None = None
     device: str = "cuda"
     confidence: float = 0.25
-    person_confidence: float = 0.35
-    helmet_confidence: float = 0.25
-    vest_confidence: float = 0.25
-    min_box_area_px: float = 100.0
     track: bool = False
-    track_iou_threshold: float = 0.20
-    track_max_lost_ms: float = 1500.0
-    track_max_lost_frames: int = 30
-    track_center_gate_ratio: float = 0.75
-    track_area_ratio_min: float = 0.35
-    track_min_score: float = 0.25
-    track_appearance: bool = True
-    track_appearance_weight: float = 0.45
-    track_appearance_min_similarity: float = 0.30
-    nms_iou_person: float = 0.65
-    nms_iou_epp: float = 0.50
-    model_iou: float = 0.50
-    image_size: int = 640
-    strict_contract_validation: bool = True
-    progress_interval: int = 25
-    max_units: int | None = None
     stride: int = 1
+    max_units: int | None = None
     run_id: str | None = None
     source_id: str | None = None
     prompt_set_id: str | None = None
-    alert_frames_alerts_path: Path | None = None
-    alert_frames_output_dir: Path | None = None
-    alert_frames_stage: str = "confirm"
-    alert_frames_variants: tuple[str, ...] = ()
-    alert_frames_image_ext: str = "jpg"
-    alert_frames_line_thickness: int = 2
-    alert_frames_details_csv_path: Path | None = None
+    progress_interval: int = 25
+    strict_contract_validation: bool = True
+    tuning: TuningConfig = field(default_factory=TuningConfig)
 
 
 @dataclass(frozen=True)
@@ -79,10 +60,6 @@ class GenerationResult:
     output_path: Path
     units_written: int
     source_type: str
-    alert_frames_output_dir: Path | None = None
-    alert_frames_index_path: Path | None = None
-    alert_frames_details_csv_path: Path | None = None
-    alert_frame_images_written: int = 0
 
 
 def _default_model_id(backend: str) -> str:
@@ -108,17 +85,17 @@ def _default_run_id() -> str:
 
 def _class_confidence_thresholds(config: GenerationConfig) -> dict[str, float]:
     return {
-        "person": config.person_confidence,
-        "helmet": config.helmet_confidence,
-        "vest": config.vest_confidence,
+        "person": config.tuning.person_confidence,
+        "helmet": config.tuning.helmet_confidence,
+        "vest": config.tuning.vest_confidence,
     }
 
 
 def _nms_iou_thresholds(config: GenerationConfig) -> dict[str, float]:
     return {
-        "person": config.nms_iou_person,
-        "helmet": config.nms_iou_epp,
-        "vest": config.nms_iou_epp,
+        "person": config.tuning.nms_iou_person,
+        "helmet": config.tuning.nms_iou_epp,
+        "vest": config.tuning.nms_iou_epp,
     }
 
 
@@ -174,7 +151,7 @@ def _person_appearance_features(
     raw: list,
     config: GenerationConfig,
 ) -> list[list[float] | None] | None:
-    if not config.track or not config.track_appearance:
+    if not config.track or not config.tuning.track_appearance:
         return None
     persons = [item for item in raw if item.label == "person"]
     if not persons:
@@ -191,6 +168,14 @@ def _iter_image_paths(folder: Path) -> list[Path]:
     if not paths:
         raise FileNotFoundError(f"No hay imagenes en {folder}")
     return paths
+
+
+def _select_strided(items: list, *, stride: int, max_units: int | None) -> list:
+    """Aplica stride primero y luego el tope max_units (semantica unica img/video)."""
+    strided = items[::stride] if stride > 1 else list(items)
+    if max_units is not None:
+        strided = strided[:max_units]
+    return strided
 
 
 def _iter_video_frames(
@@ -248,6 +233,7 @@ def _write_unit(
     timestamp_ms: float | None,
     image: Image.Image,
     tracker: SimpleIoUTracker | None = None,
+    validate_contract: bool = False,
 ) -> int:
     width, height = image.size
     frame_started = time.perf_counter()
@@ -262,7 +248,7 @@ def _write_unit(
         width=width,
         height=height,
         min_confidence=config.confidence,
-        min_box_area_px=config.min_box_area_px,
+        min_box_area_px=config.tuning.min_box_area_px,
         class_confidence_thresholds=_class_confidence_thresholds(config),
         nms_iou_thresholds=_nms_iou_thresholds(config),
     )
@@ -288,7 +274,7 @@ def _write_unit(
     )
     normalize_ms = (time.perf_counter() - normalize_started) * 1000.0
 
-    pre_write_total_ms = (time.perf_counter() - frame_started) * 1000.0
+    total_ms = (time.perf_counter() - frame_started) * 1000.0
     event = build_detection_event(
         run_id=run_id,
         unit_id=unit_id,
@@ -307,15 +293,9 @@ def _write_unit(
         inference_ms=inference_ms,
         postprocess_ms=postprocess_ms,
         write_ms=0.0,
-        total_ms=pre_write_total_ms,
+        total_ms=total_ms,
     )
-    serialize_started = time.perf_counter()
-    serialize_event(event)
-    write_ms = (time.perf_counter() - serialize_started) * 1000.0
-    total_ms = (time.perf_counter() - frame_started) * 1000.0 + write_ms
-    event.timing.write_ms = round(write_ms, 2)
-    event.timing.total_ms = round(total_ms, 2)
-    if config.strict_contract_validation:
+    if validate_contract:
         DetectionEvent.model_validate(event.model_dump())
     handle.write(serialize_event(event) + "\n")
     return len(detections)
@@ -381,8 +361,8 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
             model_id=model_id,
             device=config.device,
             confidence=config.confidence,
-            iou_threshold=config.model_iou,
-            image_size=config.image_size,
+            iou_threshold=config.tuning.model_iou,
+            image_size=config.tuning.image_size,
         ),
     )
     logger.info("Cargando backend de inferencia")
@@ -405,15 +385,15 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
     )
     tracker = (
         SimpleIoUTracker(
-            iou_threshold=config.track_iou_threshold,
-            max_lost_ms=config.track_max_lost_ms,
-            max_lost_frames=config.track_max_lost_frames,
-            center_gate_ratio=config.track_center_gate_ratio,
-            area_ratio_min=config.track_area_ratio_min,
-            min_score=config.track_min_score,
-            appearance_enabled=config.track_appearance,
-            appearance_weight=config.track_appearance_weight,
-            appearance_min_similarity=config.track_appearance_min_similarity,
+            iou_threshold=config.tuning.track_iou_threshold,
+            max_lost_ms=config.tuning.track_max_lost_ms,
+            max_lost_frames=config.tuning.track_max_lost_frames,
+            center_gate_ratio=config.tuning.track_center_gate_ratio,
+            area_ratio_min=config.tuning.track_area_ratio_min,
+            min_score=config.tuning.track_min_score,
+            appearance_enabled=config.tuning.track_appearance,
+            appearance_weight=config.tuning.track_appearance_weight,
+            appearance_min_similarity=config.tuning.track_appearance_min_similarity,
         )
         if config.track
         else None
@@ -424,28 +404,32 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
                 "Tracking activo: iou=%.2f max_lost_ms=%.0f max_lost_frames=%s "
                 "center_gate=%.2f area_ratio_min=%.2f appearance=%s"
             ),
-            config.track_iou_threshold,
-            config.track_max_lost_ms,
-            config.track_max_lost_frames,
-            config.track_center_gate_ratio,
-            config.track_area_ratio_min,
-            config.track_appearance,
+            config.tuning.track_iou_threshold,
+            config.tuning.track_max_lost_ms,
+            config.tuning.track_max_lost_frames,
+            config.tuning.track_center_gate_ratio,
+            config.tuning.track_area_ratio_min,
+            config.tuning.track_appearance,
         )
+
+    interval_ms = config.tuning.image_folder_frame_interval_ms
 
     with output_path.open("w", encoding="utf-8") as handle:
         if input_path.is_dir():
             source_type = "image_folder"
             image_paths = _iter_image_paths(input_path)
-            if config.max_units is not None:
-                image_paths = image_paths[: config.max_units]
+            selected = _select_strided(
+                list(enumerate(image_paths)),
+                stride=config.stride,
+                max_units=config.max_units,
+            )
             logger.info(
-                "Procesando carpeta de imagenes: imagenes=%s stride=%s",
+                "Procesando carpeta de imagenes: imagenes=%s seleccionadas=%s stride=%s",
                 len(image_paths),
+                len(selected),
                 config.stride,
             )
-            for frame_index, image_path in enumerate(image_paths):
-                if frame_index % config.stride != 0:
-                    continue
+            for frame_index, image_path in selected:
                 image = Image.open(image_path).convert("RGB")
                 unit_id = f"{image_path.stem}_{frame_index:06d}"
                 detections_count = _write_unit(
@@ -458,9 +442,10 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
                     unit_id=unit_id,
                     source_type=source_type,
                     frame_index=frame_index,
-                    timestamp_ms=frame_index * 500.0,
+                    timestamp_ms=frame_index * interval_ms,
                     image=image,
                     tracker=tracker,
+                    validate_contract=(units_written == 0),
                 )
                 units_written += 1
                 _log_progress(
@@ -492,6 +477,7 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
                     timestamp_ms=timestamp_ms,
                     image=image,
                     tracker=tracker,
+                    validate_contract=(units_written == 0),
                 )
                 units_written += 1
                 _log_progress(
@@ -517,6 +503,7 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
                 frame_index=0,
                 timestamp_ms=0.0,
                 image=image,
+                validate_contract=True,
             )
             units_written = 1
             _log_progress(
@@ -536,48 +523,9 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
         source_type,
         output_path,
     )
-    alert_frame_result: AlertFrameResult | None = None
-    if config.alert_frames_alerts_path is not None:
-        if input_path.suffix.lower() not in VIDEO_EXTENSIONS:
-            raise ValueError("La visualizacion de alertas requiere que --input sea un video.")
-        alert_output_dir = config.alert_frames_output_dir or output_path.parent / "alert_frame_previews"
-        logger.info(
-            "Dibujando frames de alertas: alerts=%s output_dir=%s stage=%s",
-            config.alert_frames_alerts_path,
-            alert_output_dir,
-            config.alert_frames_stage,
-        )
-        alert_frame_result = draw_alert_frames(
-            AlertFrameConfig(
-                video_path=input_path,
-                alerts_path=config.alert_frames_alerts_path,
-                output_dir=alert_output_dir,
-                stage=config.alert_frames_stage,
-                variants=config.alert_frames_variants,
-                image_ext=config.alert_frames_image_ext,
-                line_thickness=config.alert_frames_line_thickness,
-                details_csv_path=config.alert_frames_details_csv_path,
-            )
-        )
-        logger.info(
-            "Frames de alertas listos: imagenes=%s index=%s details_csv=%s",
-            alert_frame_result.images_written,
-            alert_frame_result.index_path,
-            alert_frame_result.details_csv_path,
-        )
     return GenerationResult(
         run_id=run_id,
         output_path=output_path,
         units_written=units_written,
         source_type=source_type,
-        alert_frames_output_dir=(
-            None if alert_frame_result is None else alert_frame_result.output_dir
-        ),
-        alert_frames_index_path=None if alert_frame_result is None else alert_frame_result.index_path,
-        alert_frames_details_csv_path=(
-            None if alert_frame_result is None else alert_frame_result.details_csv_path
-        ),
-        alert_frame_images_written=0
-        if alert_frame_result is None
-        else alert_frame_result.images_written,
     )

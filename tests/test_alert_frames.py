@@ -11,34 +11,6 @@ from eovrt_control.sinks.alerts_csv import (
 )
 
 
-def test_reads_focus_csv_with_candidate_and_confirm_annotations(tmp_path) -> None:
-    alerts_path = tmp_path / "alerts_focus.csv"
-    alerts_path.write_text(
-        "\n".join(
-            [
-                "variant,alert_order,pattern_id,condition_id,severity,subject_id,"
-                "missing_class,candidate_frame,candidate_second,candidate_bbox,"
-                "confirm_frame,confirm_second,confirm_bbox,confirm_confidence",
-                "baseline,1,CR-01,CR-01,high,worker_a,helmet,10,0.4,"
-                '"[10, 20, 30, 40]",15,0.6,"[11, 21, 31, 41]",0.91',
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    annotations = read_alert_annotations(alerts_path, stage="both")
-    output_path = tmp_path / "alerts_details.csv"
-    export_alert_details_csv(alerts_path, output_path, stage="both")
-    roundtrip = read_alert_annotations(output_path, stage="both")
-
-    assert [item.stage for item in annotations] == ["candidate", "confirm"]
-    assert [item.stage for item in roundtrip] == ["candidate", "confirm"]
-    assert annotations[0].bbox_xyxy == (10.0, 20.0, 30.0, 40.0)
-    assert annotations[1].frame_index == 15
-    assert annotations[1].condition_id == "CR-01"
-    assert annotations[1].missing_class == "helmet"
-
-
 def test_exports_jsonl_alerts_to_bbox_detail_csv(tmp_path) -> None:
     alerts_path = tmp_path / "alerts.jsonl"
     alerts_path.write_text(
@@ -91,3 +63,9 @@ def test_exports_jsonl_alerts_to_bbox_detail_csv(tmp_path) -> None:
     assert rows[0]["missing_class"] == "vest"
     assert rows[0]["bbox_xyxy"] == "[100, 120, 220, 420]"
     assert rows[0]["second"] == "4.920000"
+
+    roundtrip = read_alert_annotations(output_path, stage="all")
+    assert len(roundtrip) == 1
+    assert roundtrip[0].stage == "confirm"
+    assert roundtrip[0].condition_id == "CR-02"
+    assert roundtrip[0].bbox_xyxy == (100.0, 120.0, 220.0, 420.0)

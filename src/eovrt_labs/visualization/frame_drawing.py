@@ -16,7 +16,6 @@ from pathlib import Path
 from eovrt_control.sinks.alerts_csv import (
     Annotation,
     read_alert_annotations,
-    wanted_variants,
     write_alert_details_csv,
 )
 
@@ -32,7 +31,6 @@ class AlertFrameConfig:
     alerts_path: Path
     output_dir: Path = Path("alert_frame_previews")
     stage: str = "confirm"
-    variants: tuple[str, ...] = ()
     image_ext: str = "jpg"
     line_thickness: int = 2
     details_csv_path: Path | None = None
@@ -158,11 +156,7 @@ def draw_alert_frames(config: AlertFrameConfig) -> AlertFrameResult:
         raise FileNotFoundError(f"Alert file not found: {config.alerts_path}")
 
     require_cv2()
-    annotations = read_alert_annotations(
-        config.alerts_path,
-        stage=config.stage,
-        variants=config.variants,
-    )
+    annotations = read_alert_annotations(config.alerts_path, stage=config.stage)
     if not annotations:
         raise ValueError("No drawable annotations found for the requested filters.")
 
@@ -267,8 +261,8 @@ def parse_args() -> argparse.Namespace:
         required=True,
         type=Path,
         help=(
-            "CSV or JSONL with alert details. Supports alerts_focus_*.csv, alerts.csv, "
-            "control alerts.jsonl, and pattern_events.jsonl."
+            "CSV or JSONL with alert details. Supports alerts.csv, control alerts.jsonl, "
+            "and pattern_events.jsonl."
         ),
     )
     parser.add_argument(
@@ -282,11 +276,6 @@ def parse_args() -> argparse.Namespace:
         choices=STAGE_CHOICES,
         default="confirm",
         help="Which stage to draw. Use both for candidate+confirm or all for every JSONL state.",
-    )
-    parser.add_argument(
-        "--variants",
-        default="",
-        help="Optional comma-separated variant filter, e.g. baseline,conservative.",
     )
     parser.add_argument(
         "--image-ext",
@@ -318,7 +307,6 @@ def main() -> int:
                 alerts_path=args.alerts,
                 output_dir=args.output_dir,
                 stage=args.stage,
-                variants=wanted_variants(args.variants),
                 image_ext=args.image_ext,
                 line_thickness=args.line_thickness,
                 details_csv_path=args.details_csv,

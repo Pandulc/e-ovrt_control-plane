@@ -16,10 +16,6 @@ app = typer.Typer(help="E-OVRT control plane")
 console = Console()
 
 
-def _parse_variants(raw: str) -> tuple[str, ...]:
-    return tuple(item.strip() for item in raw.split(",") if item.strip())
-
-
 @app.command()
 def validate_config(config: Path) -> None:
     """Valida una configuracion de replay."""
@@ -72,21 +68,11 @@ def export_alerts_csv(
         "--stage",
         help="Etapa a exportar: confirm, candidate, both o all.",
     ),
-    variants: str = typer.Option(
-        "",
-        "--variants",
-        help="Filtro opcional por variantes separadas por coma.",
-    ),
 ) -> None:
     """Exporta alertas CSV/JSONL a un CSV normalizado con bbox y condicion."""
     from eovrt_control.sinks.alerts_csv import export_alert_details_csv
 
-    output_path = export_alert_details_csv(
-        alerts,
-        output,
-        stage=stage,
-        variants=_parse_variants(variants),
-    )
+    output_path = export_alert_details_csv(alerts, output, stage=stage)
     console.print(f"CSV de alertas: {output_path}")
 
 
