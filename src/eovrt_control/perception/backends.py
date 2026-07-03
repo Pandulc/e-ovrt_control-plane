@@ -78,7 +78,6 @@ class GroundingDinoBackend(PerceptionBackend):
         self._resolved_device = config.device
 
     def load(self) -> None:
-        import torch
         from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
         self._resolved_device = _resolve_torch_device(self.config.device)
@@ -177,6 +176,8 @@ class YoloPpeBackend(PerceptionBackend):
         results = self._model.predict(
             source=np.array(image),
             conf=self.config.confidence,
+            iou=self.config.iou_threshold,
+            imgsz=self.config.image_size,
             device=device,
             verbose=False,
         )

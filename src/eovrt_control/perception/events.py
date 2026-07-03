@@ -115,6 +115,7 @@ def build_detection_event(
     device: str,
     prompt_set_id: str,
     detections: list[Detection],
+    normalize_ms: float = 0.0,
     inference_ms: float = 0.0,
     postprocess_ms: float = 0.0,
     write_ms: float = 0.0,
@@ -139,6 +140,7 @@ def build_detection_event(
         prompts=DetectionEventPrompts(prompt_set_id=prompt_set_id),
         detections=detections,
         timing=DetectionEventTiming(
+            normalize_ms=round(normalize_ms, 2),
             inference_ms=round(inference_ms, 2),
             postprocess_ms=round(postprocess_ms, 2),
             write_ms=round(write_ms, 2),

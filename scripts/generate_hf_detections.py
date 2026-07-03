@@ -30,7 +30,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from eovrt_control.perception.generator import GenerationConfig, generate_detections_jsonl
+from eovrt_control.perception.generator import (  # noqa: E402
+    GenerationConfig,
+    generate_detections_jsonl,
+)
 
 app = typer.Typer(add_completion=False, help="Genera detections.jsonl para replay del control plane.")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -58,11 +61,39 @@ def main(
     ),
     device: str = typer.Option("cuda", "--device", help="cuda o cpu."),
     confidence: float = typer.Option(0.25, "--confidence", min=0.0, max=1.0),
+    person_confidence: float = typer.Option(0.35, "--person-confidence", min=0.0, max=1.0),
+    helmet_confidence: float = typer.Option(0.25, "--helmet-confidence", min=0.0, max=1.0),
+    vest_confidence: float = typer.Option(0.25, "--vest-confidence", min=0.0, max=1.0),
     min_box_area: float = typer.Option(100.0, "--min-box-area"),
     track: bool = typer.Option(
         False,
         "--track/--no-track",
         help="IDs estables por IoU en personas; usar al evaluar persistencia temporal en video.",
+    ),
+    track_iou_threshold: float = typer.Option(0.20, "--track-iou-threshold"),
+    track_max_lost_ms: float = typer.Option(1500.0, "--track-max-lost-ms"),
+    track_max_lost_frames: int = typer.Option(30, "--track-max-lost-frames"),
+    track_center_gate_ratio: float = typer.Option(0.75, "--track-center-gate-ratio"),
+    track_area_ratio_min: float = typer.Option(0.35, "--track-area-ratio-min"),
+    track_min_score: float = typer.Option(0.25, "--track-min-score"),
+    track_appearance: bool = typer.Option(
+        True,
+        "--track-appearance/--no-track-appearance",
+        help="Usa una firma visual liviana del torso para sostener IDs en cruces/oclusiones.",
+    ),
+    track_appearance_weight: float = typer.Option(0.45, "--track-appearance-weight"),
+    track_appearance_min_similarity: float = typer.Option(
+        0.30,
+        "--track-appearance-min-similarity",
+    ),
+    nms_iou_person: float = typer.Option(0.65, "--nms-iou-person"),
+    nms_iou_epp: float = typer.Option(0.50, "--nms-iou-epp"),
+    model_iou: float = typer.Option(0.50, "--model-iou"),
+    image_size: int = typer.Option(640, "--image-size"),
+    progress_interval: int = typer.Option(
+        25,
+        "--progress-every",
+        help="Loguea avance cada N unidades procesadas. Usar 0 para desactivar progreso intermedio.",
     ),
     max_units: int | None = typer.Option(None, "--max-units", help="Limite de frames/imagenes."),
     stride: int = typer.Option(1, "--stride", min=1),
@@ -84,8 +115,25 @@ def main(
             model_id=model_id,
             device=device,
             confidence=confidence,
+            person_confidence=person_confidence,
+            helmet_confidence=helmet_confidence,
+            vest_confidence=vest_confidence,
             min_box_area_px=min_box_area,
             track=track,
+            track_iou_threshold=track_iou_threshold,
+            track_max_lost_ms=track_max_lost_ms,
+            track_max_lost_frames=track_max_lost_frames,
+            track_center_gate_ratio=track_center_gate_ratio,
+            track_area_ratio_min=track_area_ratio_min,
+            track_min_score=track_min_score,
+            track_appearance=track_appearance,
+            track_appearance_weight=track_appearance_weight,
+            track_appearance_min_similarity=track_appearance_min_similarity,
+            nms_iou_person=nms_iou_person,
+            nms_iou_epp=nms_iou_epp,
+            model_iou=model_iou,
+            image_size=image_size,
+            progress_interval=progress_interval,
             max_units=max_units,
             stride=stride,
             run_id=run_id,

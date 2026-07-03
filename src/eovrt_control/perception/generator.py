@@ -10,11 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
+import numpy as np
 from PIL import Image
 
 from eovrt_control.perception.backends import BackendConfig, PerceptionBackend, create_backend
 from eovrt_control.perception.events import build_detection_event, serialize_event
-from eovrt_control.perception.normalizer import normalize_detections
+from eovrt_control.contracts.media import DetectionEvent
+from eovrt_control.perception.normalizer import normalize_detections, postprocess_raw_detections
 from eovrt_control.perception.tracking import SimpleIoUTracker, apply_person_tracking
 from eovrt_control.perception.weights import DEFAULT_YOLOE_MODEL_ID, DEFAULT_WEIGHTS_FILENAME
 
@@ -32,8 +34,26 @@ class GenerationConfig:
     model_id: str | None = None
     device: str = "cuda"
     confidence: float = 0.25
+    person_confidence: float = 0.35
+    helmet_confidence: float = 0.25
+    vest_confidence: float = 0.25
     min_box_area_px: float = 100.0
     track: bool = False
+    track_iou_threshold: float = 0.20
+    track_max_lost_ms: float = 1500.0
+    track_max_lost_frames: int = 30
+    track_center_gate_ratio: float = 0.75
+    track_area_ratio_min: float = 0.35
+    track_min_score: float = 0.25
+    track_appearance: bool = True
+    track_appearance_weight: float = 0.45
+    track_appearance_min_similarity: float = 0.30
+    nms_iou_person: float = 0.65
+    nms_iou_epp: float = 0.50
+    model_iou: float = 0.50
+    image_size: int = 640
+    strict_contract_validation: bool = True
+    progress_interval: int = 25
     max_units: int | None = None
     stride: int = 1
     run_id: str | None = None
@@ -70,6 +90,82 @@ def _default_run_id() -> str:
     return f"run_{date}_001"
 
 
+def _class_confidence_thresholds(config: GenerationConfig) -> dict[str, float]:
+    return {
+        "person": config.person_confidence,
+        "helmet": config.helmet_confidence,
+        "vest": config.vest_confidence,
+    }
+
+
+def _nms_iou_thresholds(config: GenerationConfig) -> dict[str, float]:
+    return {
+        "person": config.nms_iou_person,
+        "helmet": config.nms_iou_epp,
+        "vest": config.nms_iou_epp,
+    }
+
+
+def _safe_normalized_histogram(values: np.ndarray, bins: int, value_range: tuple[int, int]) -> np.ndarray:
+    hist, _ = np.histogram(values, bins=bins, range=value_range)
+    hist = hist.astype("float32")
+    total = float(hist.sum())
+    if total <= 0.0:
+        return hist
+    return hist / total
+
+
+def _person_appearance_feature(
+    image: Image.Image,
+    box_xyxy: list[float],
+) -> list[float] | None:
+    width, height = image.size
+    x1, y1, x2, y2 = box_xyxy
+    box_w = max(0.0, x2 - x1)
+    box_h = max(0.0, y2 - y1)
+    if box_w < 8.0 or box_h < 16.0:
+        return None
+
+    crop_x1 = int(max(0.0, min(float(width), x1 + box_w * 0.10)))
+    crop_x2 = int(max(0.0, min(float(width), x2 - box_w * 0.10)))
+    crop_y1 = int(max(0.0, min(float(height), y1 + box_h * 0.18)))
+    crop_y2 = int(max(0.0, min(float(height), y1 + box_h * 0.85)))
+    if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+        return None
+
+    rgb = np.asarray(image, dtype=np.uint8)
+    crop = rgb[crop_y1:crop_y2, crop_x1:crop_x2]
+    if crop.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+    h_hist = _safe_normalized_histogram(hsv[:, :, 0], 12, (0, 180))
+    s_hist = _safe_normalized_histogram(hsv[:, :, 1], 4, (0, 256))
+    v_hist = _safe_normalized_histogram(hsv[:, :, 2], 4, (0, 256))
+    flat_rgb = crop.reshape(-1, 3).astype("float32") / 255.0
+    rgb_mean = flat_rgb.mean(axis=0)
+    rgb_std = flat_rgb.std(axis=0)
+
+    feature = np.concatenate([h_hist, s_hist, v_hist, rgb_mean, rgb_std])
+    norm = float(np.linalg.norm(feature))
+    if norm <= 0.0:
+        return None
+    return (feature / norm).astype("float32").tolist()
+
+
+def _person_appearance_features(
+    image: Image.Image,
+    raw: list,
+    config: GenerationConfig,
+) -> list[list[float] | None] | None:
+    if not config.track or not config.track_appearance:
+        return None
+    persons = [item for item in raw if item.label == "person"]
+    if not persons:
+        return []
+    return [_person_appearance_feature(image, item.bbox_xyxy) for item in persons]
+
+
 def _iter_image_paths(folder: Path) -> list[Path]:
     paths = [
         path
@@ -92,6 +188,15 @@ def _iter_video_frames(
         raise RuntimeError(f"No se pudo abrir el video: {video_path}")
 
     fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    logger.info(
+        "Video abierto: path=%s fps=%.2f frames=%s stride=%s max_units=%s",
+        video_path,
+        fps,
+        frame_count or "desconocido",
+        stride,
+        max_units if max_units is not None else "sin limite",
+    )
     frame_index = -1
     emitted = 0
     try:
@@ -127,50 +232,47 @@ def _write_unit(
     timestamp_ms: float | None,
     image: Image.Image,
     tracker: SimpleIoUTracker | None = None,
-) -> None:
+) -> int:
     width, height = image.size
     frame_started = time.perf_counter()
 
     infer_started = time.perf_counter()
     raw = backend.predict(image)
-    raw = apply_person_tracking(raw, tracker)
     inference_ms = (time.perf_counter() - infer_started) * 1000.0
 
     post_started = time.perf_counter()
+    raw = postprocess_raw_detections(
+        raw,
+        width=width,
+        height=height,
+        min_confidence=config.confidence,
+        min_box_area_px=config.min_box_area_px,
+        class_confidence_thresholds=_class_confidence_thresholds(config),
+        nms_iou_thresholds=_nms_iou_thresholds(config),
+    )
+    appearance_features = _person_appearance_features(image, raw, config)
+    raw = apply_person_tracking(
+        raw,
+        tracker,
+        appearance_features=appearance_features,
+        frame_index=frame_index,
+        timestamp_ms=timestamp_ms,
+    )
+    postprocess_ms = (time.perf_counter() - post_started) * 1000.0
+
+    normalize_started = time.perf_counter()
     detections = normalize_detections(
         raw,
         width=width,
         height=height,
         model_name=backend.model_name,
-        min_confidence=config.confidence,
-        min_box_area_px=config.min_box_area_px,
+        min_confidence=0.0,
+        min_box_area_px=0.0,
+        apply_postprocessing=False,
     )
-    postprocess_ms = (time.perf_counter() - post_started) * 1000.0
+    normalize_ms = (time.perf_counter() - normalize_started) * 1000.0
 
-    write_prep_started = time.perf_counter()
-    provisional = build_detection_event(
-        run_id=run_id,
-        unit_id=unit_id,
-        source_id=source_id,
-        source_type=source_type,
-        frame_index=frame_index,
-        timestamp_ms=timestamp_ms,
-        width=width,
-        height=height,
-        model_name=backend.model_name,
-        model_id=backend.model_id,
-        device=backend.resolved_device,
-        prompt_set_id=prompt_set_id,
-        detections=detections,
-        inference_ms=inference_ms,
-        postprocess_ms=postprocess_ms,
-        write_ms=0.0,
-        total_ms=0.0,
-    )
-    serialize_event(provisional)
-    write_ms = (time.perf_counter() - write_prep_started) * 1000.0
-    total_ms = (time.perf_counter() - frame_started) * 1000.0
-
+    pre_write_total_ms = (time.perf_counter() - frame_started) * 1000.0
     event = build_detection_event(
         run_id=run_id,
         unit_id=unit_id,
@@ -185,39 +287,133 @@ def _write_unit(
         device=backend.resolved_device,
         prompt_set_id=prompt_set_id,
         detections=detections,
+        normalize_ms=normalize_ms,
         inference_ms=inference_ms,
         postprocess_ms=postprocess_ms,
-        write_ms=write_ms,
-        total_ms=total_ms,
+        write_ms=0.0,
+        total_ms=pre_write_total_ms,
     )
+    serialize_started = time.perf_counter()
+    serialize_event(event)
+    write_ms = (time.perf_counter() - serialize_started) * 1000.0
+    total_ms = (time.perf_counter() - frame_started) * 1000.0 + write_ms
+    event.timing.write_ms = round(write_ms, 2)
+    event.timing.total_ms = round(total_ms, 2)
+    if config.strict_contract_validation:
+        DetectionEvent.model_validate(event.model_dump())
     handle.write(serialize_event(event) + "\n")
+    return len(detections)
+
+
+def _should_log_progress(units_written: int, config: GenerationConfig) -> bool:
+    if units_written == 1:
+        return True
+    if config.progress_interval <= 0:
+        return False
+    return units_written % config.progress_interval == 0
+
+
+def _log_progress(
+    *,
+    units_written: int,
+    config: GenerationConfig,
+    unit_id: str,
+    detections_count: int,
+) -> None:
+    if not _should_log_progress(units_written, config):
+        return
+    if config.max_units is None:
+        logger.info(
+            "Progreso: unidades=%s ultima_unidad=%s detecciones=%s",
+            units_written,
+            unit_id,
+            detections_count,
+        )
+        return
+    logger.info(
+        "Progreso: unidades=%s/%s ultima_unidad=%s detecciones=%s",
+        units_written,
+        config.max_units,
+        unit_id,
+        detections_count,
+    )
 
 
 def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
     input_path = config.input_path.resolve()
     output_path = config.output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Preparando generacion de detecciones")
+    logger.info("Entrada: %s", input_path)
+    logger.info("Salida JSONL: %s", output_path)
 
     backend_name = config.backend
     model_id = config.model_id or _default_model_id(backend_name)
     prompt_set_id = config.prompt_set_id or _default_prompt_set_id(backend_name)
+    logger.info(
+        "Configuracion: backend=%s model_id=%s device=%s stride=%s max_units=%s track=%s",
+        backend_name,
+        model_id,
+        config.device,
+        config.stride,
+        config.max_units if config.max_units is not None else "sin limite",
+        config.track,
+    )
     backend: PerceptionBackend = create_backend(
         backend_name,
         BackendConfig(
             model_id=model_id,
             device=config.device,
             confidence=config.confidence,
+            iou_threshold=config.model_iou,
+            image_size=config.image_size,
         ),
     )
+    logger.info("Cargando backend de inferencia")
     backend.load()
+    logger.info(
+        "Backend listo: model_name=%s model_id=%s device=%s",
+        backend.model_name,
+        backend.model_id,
+        backend.resolved_device,
+    )
 
     run_id = config.run_id or _default_run_id()
     source_id = config.source_id or input_path.stem
     units_written = 0
-    tracker = SimpleIoUTracker() if config.track else None
+    logger.info(
+        "Run preparado: run_id=%s source_id=%s prompt_set_id=%s",
+        run_id,
+        source_id,
+        prompt_set_id,
+    )
+    tracker = (
+        SimpleIoUTracker(
+            iou_threshold=config.track_iou_threshold,
+            max_lost_ms=config.track_max_lost_ms,
+            max_lost_frames=config.track_max_lost_frames,
+            center_gate_ratio=config.track_center_gate_ratio,
+            area_ratio_min=config.track_area_ratio_min,
+            min_score=config.track_min_score,
+            appearance_enabled=config.track_appearance,
+            appearance_weight=config.track_appearance_weight,
+            appearance_min_similarity=config.track_appearance_min_similarity,
+        )
+        if config.track
+        else None
+    )
     if config.track:
         logger.info(
-            "Tracking activo: personas emiten detection_id estables (subject_NNN) entre frames"
+            (
+                "Tracking activo: iou=%.2f max_lost_ms=%.0f max_lost_frames=%s "
+                "center_gate=%.2f area_ratio_min=%.2f appearance=%s"
+            ),
+            config.track_iou_threshold,
+            config.track_max_lost_ms,
+            config.track_max_lost_frames,
+            config.track_center_gate_ratio,
+            config.track_area_ratio_min,
+            config.track_appearance,
         )
 
     with output_path.open("w", encoding="utf-8") as handle:
@@ -226,18 +422,24 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
             image_paths = _iter_image_paths(input_path)
             if config.max_units is not None:
                 image_paths = image_paths[: config.max_units]
+            logger.info(
+                "Procesando carpeta de imagenes: imagenes=%s stride=%s",
+                len(image_paths),
+                config.stride,
+            )
             for frame_index, image_path in enumerate(image_paths):
                 if frame_index % config.stride != 0:
                     continue
                 image = Image.open(image_path).convert("RGB")
-                _write_unit(
+                unit_id = f"{image_path.stem}_{frame_index:06d}"
+                detections_count = _write_unit(
                     handle,
                     config=config,
                     backend=backend,
                     run_id=run_id,
                     source_id=source_id,
                     prompt_set_id=prompt_set_id,
-                    unit_id=f"{image_path.stem}_{frame_index:06d}",
+                    unit_id=unit_id,
                     source_type=source_type,
                     frame_index=frame_index,
                     timestamp_ms=frame_index * 500.0,
@@ -245,22 +447,30 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
                     tracker=tracker,
                 )
                 units_written += 1
+                _log_progress(
+                    units_written=units_written,
+                    config=config,
+                    unit_id=unit_id,
+                    detections_count=detections_count,
+                )
 
         elif input_path.suffix.lower() in VIDEO_EXTENSIONS:
             source_type = "video_frame"
+            logger.info("Procesando video")
             for frame_index, timestamp_ms, image in _iter_video_frames(
                 input_path,
                 stride=config.stride,
                 max_units=config.max_units,
             ):
-                _write_unit(
+                unit_id = f"frame_{frame_index:06d}"
+                detections_count = _write_unit(
                     handle,
                     config=config,
                     backend=backend,
                     run_id=run_id,
                     source_id=source_id,
                     prompt_set_id=prompt_set_id,
-                    unit_id=f"frame_{frame_index:06d}",
+                    unit_id=unit_id,
                     source_type=source_type,
                     frame_index=frame_index,
                     timestamp_ms=timestamp_ms,
@@ -268,11 +478,18 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
                     tracker=tracker,
                 )
                 units_written += 1
+                _log_progress(
+                    units_written=units_written,
+                    config=config,
+                    unit_id=unit_id,
+                    detections_count=detections_count,
+                )
 
         elif input_path.suffix.lower() in IMAGE_EXTENSIONS:
             source_type = "image"
+            logger.info("Procesando imagen unica")
             image = Image.open(input_path).convert("RGB")
-            _write_unit(
+            detections_count = _write_unit(
                 handle,
                 config=config,
                 backend=backend,
@@ -286,12 +503,23 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
                 image=image,
             )
             units_written = 1
+            _log_progress(
+                units_written=units_written,
+                config=config,
+                unit_id=input_path.stem,
+                detections_count=detections_count,
+            )
         else:
             raise ValueError(
                 f"Entrada no soportada: {input_path}. Usar imagen, carpeta o video."
             )
 
-    logger.info("Escritas %s unidades en %s", units_written, output_path)
+    logger.info(
+        "Generacion finalizada: unidades=%s source_type=%s salida=%s",
+        units_written,
+        source_type,
+        output_path,
+    )
     return GenerationResult(
         run_id=run_id,
         output_path=output_path,
