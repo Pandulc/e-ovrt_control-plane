@@ -1,0 +1,12 @@
+# Tuning sugerido para video5 con gdino, a partir de la inspeccion visual del
+# run replay_hf_temporal_20260707T233019Z:
+# - nms_iou_person mas estricto: elimina cajas de persona duplicadas en clusters
+#   densos (causa de CR-01 falsos cuando hay mas cajas que cascos detectados).
+# - vest_confidence mas bajo: el chaleco amarillo destenido sobre camisa clara
+#   oscila alrededor de conf 0.25-0.35 (frame 51 sin deteccion, frame 282 con 0.313);
+#   bajar el umbral recupera parte de esos frames.
+# - track_max_lost_ms mas alto: reduce fragmentacion de IDs en oclusiones largas
+#   (manguera de hormigon), para que el cooldown por sujeto pueda actuar.
+nms_iou_person: 0.50
+vest_confidence: 0.20
+track_max_lost_ms: 3000.0

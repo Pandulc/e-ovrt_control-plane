@@ -98,3 +98,53 @@ def test_shared_epp_covers_only_closest_person() -> None:
     assert len(result.evidences) == 1
     assert result.evidences[0].subject.detection_id == "pB"
 
+
+def test_overlapping_persons_do_not_steal_each_others_helmet() -> None:
+    # Regresion del caso real (video5, frame 282): dos cajas de persona superpuestas,
+    # dos cascos detectados. Un greedy puro por distancia le asignaba el casco del
+    # sujeto trasero a la caja delantera (mas cercana) y disparaba un CR-01 falso,
+    # dejando el otro casco sin usar. El matching de cardinalidad maxima debe
+    # cubrir a ambos.
+    patterns = load_patterns_file("configs/patterns/cr01_cr02_v1.yaml")
+    pattern = patterns.active_patterns(["CR-01"])[0]
+    event = _event(
+        [
+            # p1: caja superpuesta cuya region contiene ambos cascos; el casco de p2
+            # le queda mas cerca que el propio.
+            Detection(
+                detection_id="p1",
+                label="person",
+                prompt_id="person",
+                confidence=0.9,
+                bbox_xyxy=[90, 60, 210, 260],
+            ),
+            # p2: dueno real del casco h_a.
+            Detection(
+                detection_id="p2",
+                label="person",
+                prompt_id="person",
+                confidence=0.9,
+                bbox_xyxy=[100, 100, 200, 500],
+            ),
+            Detection(
+                detection_id="h_a",
+                label="helmet",
+                prompt_id="helmet",
+                confidence=0.8,
+                bbox_xyxy=[140, 120, 180, 160],
+            ),
+            Detection(
+                detection_id="h_b",
+                label="helmet",
+                prompt_id="helmet",
+                confidence=0.8,
+                bbox_xyxy=[95, 65, 125, 95],
+            ),
+        ]
+    )
+
+    result = evaluate_spatial_absence(event, pattern)
+
+    assert result.evidences == []
+    assert len(result.observed_subject_keys) == 2
+

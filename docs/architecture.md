@@ -33,7 +33,7 @@ El plano de medios produce evidencia positiva para `person`, `helmet` y `vest`. 
 
 1. toma cada deteccion `person` como sujeto;
 2. define una region esperada dentro de la caja de la persona;
-3. asocia el EPP requerido cuyo centro cae en esa region, con matching **1:1**: cada casco/chaleco valida a lo sumo a una persona (la mas cercana al centro de la region). Un EPP ajeno no puede cubrir a dos personas superpuestas a la vez;
+3. asocia el EPP requerido cuyo centro cae en esa region, con matching **1:1 de cardinalidad maxima**: cada casco/chaleco valida a lo sumo a una persona, cubriendo a la mayor cantidad posible de sujetos y prefiriendo las asociaciones mas cercanas. Un EPP ajeno no puede cubrir a dos personas a la vez, y con cajas superpuestas no le "roba" el EPP a su dueno si hay otro disponible;
 4. si el sujeto queda sin EPP asociado, genera evidencia positiva del patron `person_without_*`.
 
 Esta aproximacion es intencionalmente simple. Es apta para primeras corridas DBE, pero no reemplaza tracking, segmentacion, calibracion por escena ni validacion estadistica posterior.

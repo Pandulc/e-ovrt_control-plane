@@ -77,26 +77,44 @@ def _match_epp_to_subjects(
     regions: list[list[float]],
     required_items: list[Detection],
 ) -> set[int]:
-    """Asigna cada EPP a lo sumo a una persona (greedy por cercania) y devuelve los
-    indices de sujeto que quedaron cubiertos por algun EPP asociado."""
+    """Asigna cada EPP a lo sumo a una persona y devuelve los indices de sujeto cubiertos.
 
-    pairs: list[tuple[float, int, int]] = []
-    for subject_index, region in enumerate(regions):
+    Usa matching bipartito de cardinalidad maxima (caminos aumentantes) en lugar de
+    greedy puro: con cajas de persona superpuestas, el greedy podia "robarle" el casco
+    a su dueno real y disparar una alerta falsa aunque hubiera otro EPP disponible.
+    La adyacencia se ordena por cercania al centro de la region para preferir, entre
+    matchings del mismo tamano, las asociaciones espacialmente mas plausibles.
+    """
+
+    adjacency: list[list[int]] = []
+    for region in regions:
         region_center = _region_center(region)
+        candidates: list[tuple[float, int]] = []
         for item_index, item in enumerate(required_items):
             if not _center_inside_region(item, region):
                 continue
             distance = _sq_distance(_bbox_center(item.bbox_xyxy), region_center)
-            pairs.append((distance, subject_index, item_index))
+            candidates.append((distance, item_index))
+        candidates.sort()
+        adjacency.append([item_index for _, item_index in candidates])
 
-    pairs.sort()
+    item_owner: dict[int, int] = {}
+
+    def _try_assign(subject_index: int, visited: set[int]) -> bool:
+        for item_index in adjacency[subject_index]:
+            if item_index in visited:
+                continue
+            visited.add(item_index)
+            owner = item_owner.get(item_index)
+            if owner is None or _try_assign(owner, visited):
+                item_owner[item_index] = subject_index
+                return True
+        return False
+
     covered: set[int] = set()
-    used_items: set[int] = set()
-    for _, subject_index, item_index in pairs:
-        if subject_index in covered or item_index in used_items:
-            continue
-        covered.add(subject_index)
-        used_items.add(item_index)
+    for subject_index in range(len(regions)):
+        if _try_assign(subject_index, set()):
+            covered.add(subject_index)
     return covered
 
 
