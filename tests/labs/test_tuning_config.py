@@ -37,3 +37,25 @@ def test_load_tuning_rejects_unknown_keys(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="no reconocidas"):
         load_tuning_config(path)
+
+
+def test_backend_confidence_floor_is_min_of_all_thresholds(tmp_path) -> None:
+    # Un umbral por clase menor al confidence global debe bajar el piso del
+    # backend; si no, el modelo descartaria esas detecciones antes del
+    # postproceso y el umbral por clase seria un no-op.
+    pytest.importorskip("cv2", reason="generator requiere el extra [labs]")
+    from eovrt_labs.perception.generator import GenerationConfig, _backend_confidence
+
+    config = GenerationConfig(
+        input_path=tmp_path,
+        output_path=tmp_path / "out.jsonl",
+        confidence=0.25,
+        tuning=TuningConfig(vest_confidence=0.20),
+    )
+    assert _backend_confidence(config) == 0.20
+
+    config_default = GenerationConfig(
+        input_path=tmp_path,
+        output_path=tmp_path / "out.jsonl",
+    )
+    assert _backend_confidence(config_default) == 0.25

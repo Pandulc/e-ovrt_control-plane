@@ -91,6 +91,17 @@ def _class_confidence_thresholds(config: GenerationConfig) -> dict[str, float]:
     }
 
 
+def _backend_confidence(config: GenerationConfig) -> float:
+    """Piso de confianza para el modelo: el minimo de todos los umbrales.
+
+    El backend filtra internamente con este valor ANTES del postproceso por clase.
+    Si fuera el `confidence` global a secas, un umbral por clase menor (p. ej.
+    vest_confidence 0.20 con confidence 0.25) nunca surtiria efecto porque el
+    modelo ya habria descartado esas detecciones.
+    """
+    return min(config.confidence, *(_class_confidence_thresholds(config).values()))
+
+
 def _nms_iou_thresholds(config: GenerationConfig) -> dict[str, float]:
     return {
         "person": config.tuning.nms_iou_person,
@@ -355,12 +366,16 @@ def generate_detections_jsonl(config: GenerationConfig) -> GenerationResult:
         config.max_units if config.max_units is not None else "sin limite",
         config.track,
     )
+    backend_floor = _backend_confidence(config)
     backend: PerceptionBackend = create_backend(
         backend_name,
         BackendConfig(
             model_id=model_id,
             device=config.device,
-            confidence=config.confidence,
+            confidence=backend_floor,
+            # gdino filtra ademas por box_threshold en el postproceso HF; debe
+            # acompanar el piso o los umbrales por clase menores no surten efecto.
+            box_threshold=min(0.30, backend_floor),
             iou_threshold=config.tuning.model_iou,
             image_size=config.tuning.image_size,
         ),
