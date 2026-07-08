@@ -23,6 +23,8 @@ class PatternRuntimeState:
     last_seen_frame: int | None = None
     last_alert_timestamp_ms: float | None = None
     last_alert_frame: int | None = None
+    last_covered_timestamp_ms: float | None = None
+    last_covered_frame: int | None = None
 
 
 @dataclass(frozen=True)
@@ -53,7 +55,40 @@ class PatternEngine:
             evidences_count += len(result.evidences)
             subjects_count += len(result.observed_subject_keys)
 
+            memory_enabled = (
+                pattern.timing.coverage_memory_ms is not None
+                or pattern.timing.coverage_memory_frames is not None
+            )
+
+            # Sujetos con cobertura real: registrar la cobertura y avanzar clear.
+            clear_subjects = result.observed_subject_keys - set(evidence_by_subject)
+            for subject_key in clear_subjects:
+                key = (pattern.id, subject_key)
+                runtime_state = self._state.get(key)
+                if runtime_state is None and memory_enabled:
+                    runtime_state = self._state.setdefault(key, PatternRuntimeState())
+                if runtime_state is not None:
+                    runtime_state.last_covered_timestamp_ms = event.source.timestamp_ms
+                    runtime_state.last_covered_frame = event.source.frame_index
+                    runtime_state.last_seen_timestamp_ms = event.source.timestamp_ms
+                    runtime_state.last_seen_frame = event.source.frame_index
+                change = self._advance_clear(event, pattern, subject_key)
+                if change is not None:
+                    pattern_events.append(change)
+
             for subject_key, evidence in evidence_by_subject.items():
+                runtime_state = self._state.get((pattern.id, subject_key))
+                if runtime_state is not None and self._memory_covers(
+                    event, pattern, runtime_state
+                ):
+                    # Cobertura reciente: tratar como cubierto (sin refrescar la
+                    # memoria, que solo se renueva con cobertura real).
+                    runtime_state.last_seen_timestamp_ms = event.source.timestamp_ms
+                    runtime_state.last_seen_frame = event.source.frame_index
+                    change = self._advance_clear(event, pattern, subject_key)
+                    if change is not None:
+                        pattern_events.append(change)
+                    continue
                 change = self._advance_hit(event, pattern, subject_key, evidence)
                 if change is None:
                     continue
@@ -62,12 +97,6 @@ class PatternEngine:
                     alert = self._maybe_alert(event, pattern, change)
                     if alert is not None:
                         alerts.append(alert)
-
-            clear_subjects = result.observed_subject_keys - set(evidence_by_subject)
-            for subject_key in clear_subjects:
-                change = self._advance_clear(event, pattern, subject_key)
-                if change is not None:
-                    pattern_events.append(change)
 
             pattern_events.extend(
                 self._expire_absent_subjects(event, pattern, result.observed_subject_keys)
@@ -169,6 +198,32 @@ class PatternEngine:
             event, pattern, subject_key, previous, "resolved", placeholder
         )
 
+    def _memory_covers(
+        self,
+        event: DetectionEvent,
+        pattern: PatternDefinition,
+        runtime_state: PatternRuntimeState,
+    ) -> bool:
+        """True si el sujeto tuvo cobertura real dentro de la ventana de memoria."""
+        memory_ms = pattern.timing.coverage_memory_ms
+        memory_frames = pattern.timing.coverage_memory_frames
+        if memory_ms is None and memory_frames is None:
+            return False
+        if (
+            memory_ms is not None
+            and event.source.timestamp_ms is not None
+            and runtime_state.last_covered_timestamp_ms is not None
+        ):
+            elapsed = event.source.timestamp_ms - runtime_state.last_covered_timestamp_ms
+            return elapsed <= memory_ms
+        if (
+            memory_frames is not None
+            and event.source.frame_index is not None
+            and runtime_state.last_covered_frame is not None
+        ):
+            return event.source.frame_index - runtime_state.last_covered_frame <= memory_frames
+        return False
+
     def _expire_absent_subjects(
         self,
         event: DetectionEvent,
@@ -182,10 +237,15 @@ class PatternEngine:
             return []
 
         changes: list[PatternStateChanged] = []
+        stale_keys: list[tuple[str, str]] = []
         for (pattern_id, subject_key), runtime_state in self._state.items():
             if pattern_id != pattern.id or subject_key in observed_subject_keys:
                 continue
             if runtime_state.state in {"inactive", "resolved"}:
+                # Entradas sin condicion activa (p. ej. creadas por la memoria de
+                # cobertura): purgarlas al expirar para acotar el estado.
+                if self._absence_exceeded(event, runtime_state, timeout_ms, timeout_frames):
+                    stale_keys.append((pattern_id, subject_key))
                 continue
             if not self._absence_exceeded(event, runtime_state, timeout_ms, timeout_frames):
                 continue
@@ -215,6 +275,8 @@ class PatternEngine:
                     event, pattern, subject_key, previous, "resolved", placeholder
                 )
             )
+        for key in stale_keys:
+            del self._state[key]
         return changes
 
     def _absence_exceeded(

@@ -50,11 +50,20 @@ def _region_bbox(subject_bbox: list[float], pattern: PatternDefinition) -> list[
     width = max(0.0, x2 - x1)
     height = max(0.0, y2 - y1)
     margin_x = width * pattern.region.x_margin_ratio
+
+    y_min_ratio = pattern.region.y_min_ratio
+    y_max_ratio = pattern.region.y_max_ratio
+    aspect_limit = pattern.region.full_height_aspect_ratio
+    if aspect_limit is not None and height > 0.0 and (width / height) >= aspect_limit:
+        # Sujeto agachado/inclinado: la banda vertical pensada para una persona
+        # erguida no cubre donde queda el EPP (p. ej. chaleco arriba de la caja).
+        y_min_ratio, y_max_ratio = 0.0, 1.0
+
     return [
         x1 + margin_x,
-        y1 + height * pattern.region.y_min_ratio,
+        y1 + height * y_min_ratio,
         x2 - margin_x,
-        y1 + height * pattern.region.y_max_ratio,
+        y1 + height * y_max_ratio,
     ]
 
 

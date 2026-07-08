@@ -148,3 +148,51 @@ def test_overlapping_persons_do_not_steal_each_others_helmet() -> None:
     assert result.evidences == []
     assert len(result.observed_subject_keys) == 2
 
+
+def test_bent_pose_expands_region_to_full_height() -> None:
+    # Regresion del caso real (video5, frame 366): trabajador agachado con el
+    # chaleco detectado en el tope de su caja. La caja es mas ancha que alta y
+    # la banda torso (25%-85%) queda por debajo del chaleco -> falso CR-02.
+    # Con full_height_aspect_ratio la region cubre toda la caja.
+    base = {
+        "id": "CR-02",
+        "name": "person_without_vest",
+        "condition_id": "CR-02",
+        "subject_class": "person",
+        "required_absent_class": "vest",
+        "evidence": {"min_absent_class_confidence": 0.20},
+        "region": {
+            "type": "torso",
+            "y_min_ratio": 0.25,
+            "y_max_ratio": 0.85,
+            "x_margin_ratio": 0.08,
+        },
+    }
+    # Persona agachada: caja 246x326 px (aspecto 0.75), chaleco con centro
+    # apenas por encima del inicio de la banda torso.
+    detections = [
+        Detection(
+            detection_id="p1",
+            label="person",
+            prompt_id="person",
+            confidence=0.9,
+            bbox_xyxy=[1264, 1381, 1510, 1707],
+        ),
+        Detection(
+            detection_id="v1",
+            label="vest",
+            prompt_id="vest",
+            confidence=0.26,
+            bbox_xyxy=[1266, 1389, 1421, 1531],
+        ),
+    ]
+
+    from eovrt_control.config import PatternDefinition
+
+    rigid = PatternDefinition.model_validate(base)
+    assert len(evaluate_spatial_absence(_event(detections), rigid).evidences) == 1
+
+    adaptive_config = {**base, "region": {**base["region"], "full_height_aspect_ratio": 0.75}}
+    adaptive = PatternDefinition.model_validate(adaptive_config)
+    assert evaluate_spatial_absence(_event(detections), adaptive).evidences == []
+

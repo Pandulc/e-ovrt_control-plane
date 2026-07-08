@@ -176,6 +176,52 @@ def test_engine_expires_absent_subject() -> None:
     assert expired.alerts == []
 
 
+def test_engine_coverage_memory_bridges_detection_gaps() -> None:
+    # Caso real (video5, subject_006): el chaleco se detecta en ~80% de los
+    # frames con huecos breves; sin memoria, los hits se acumulan a traves de
+    # los huecos y confirman. Con memoria de cobertura no debe alertar.
+    engine = PatternEngine(
+        control_run_id="control-run",
+        patterns=[
+            _lifecycle_pattern(
+                confirm_after_frames=99,
+                confirm_after_ms=1000.0,
+                coverage_memory_ms=1500.0,
+            )
+        ],
+    )
+
+    engine.process(_event_at(0.0, 0, has_helmet=True))
+    results = [
+        engine.process(_event_at(500.0, 1)),
+        engine.process(_event_at(1000.0, 2)),
+        engine.process(_event_at(1500.0, 3)),
+    ]
+
+    assert all(result.alerts == [] for result in results)
+    assert all(result.pattern_events == [] for result in results)
+
+
+def test_engine_coverage_memory_does_not_mask_never_covered_subject() -> None:
+    engine = PatternEngine(
+        control_run_id="control-run",
+        patterns=[
+            _lifecycle_pattern(
+                confirm_after_frames=99,
+                confirm_after_ms=1000.0,
+                coverage_memory_ms=1500.0,
+            )
+        ],
+    )
+
+    engine.process(_event_at(0.0, 0))
+    engine.process(_event_at(500.0, 1))
+    confirmed = engine.process(_event_at(1000.0, 2))
+
+    assert [event.state for event in confirmed.pattern_events] == ["confirmed"]
+    assert len(confirmed.alerts) == 1
+
+
 def test_engine_realert_cooldown_suppresses_reconfirm_alert() -> None:
     engine = PatternEngine(
         control_run_id="control-run",

@@ -1,6 +1,11 @@
 pattern_set:
-  id: cr01_cr02_temporal_eval
-  description: "Patrones CR-01/CR-02 con persistencia temporal para pruebas simuladas."
+  id: cr01_cr02_field_v1
+  description: >
+    Perfil de campo para video real: persistencia temporal + expiracion de sujetos
+    + cooldown de re-alerta + region adaptativa por pose + memoria de cobertura EPP
+    (amortigua parpadeo del detector y oclusiones breves). La memoria retrasa la
+    alerta hasta coverage_memory_ms despues de la ultima cobertura real, por eso
+    NO se usa en el fixture sintetico (cr01_cr02_temporal_eval).
   patterns:
     - id: CR-01
       name: person_without_helmet
@@ -18,17 +23,19 @@ pattern_set:
         full_height_aspect_ratio: 0.75
       evidence:
         min_subject_confidence: 0.35
-        min_absent_class_confidence: 0.25
+        min_absent_class_confidence: 0.30
         min_subject_area_px: 400.0
       timing:
         confirm_after_frames: 3
         resolve_after_frames: 2
         confirm_after_ms: 1000.0
         resolve_after_ms: 500.0
-        subject_absent_timeout_frames: 6
+        subject_absent_timeout_frames: 75
         subject_absent_timeout_ms: 3000.0
-        realert_cooldown_frames: 10
+        realert_cooldown_frames: 125
         realert_cooldown_ms: 5000.0
+        coverage_memory_frames: 38
+        coverage_memory_ms: 1500.0
 
     - id: CR-02
       name: person_without_vest
@@ -46,14 +53,16 @@ pattern_set:
         full_height_aspect_ratio: 0.75
       evidence:
         min_subject_confidence: 0.35
-        min_absent_class_confidence: 0.25
+        min_absent_class_confidence: 0.30
         min_subject_area_px: 400.0
       timing:
         confirm_after_frames: 3
         resolve_after_frames: 2
         confirm_after_ms: 1000.0
         resolve_after_ms: 500.0
-        subject_absent_timeout_frames: 6
+        subject_absent_timeout_frames: 75
         subject_absent_timeout_ms: 3000.0
-        realert_cooldown_frames: 10
+        realert_cooldown_frames: 125
         realert_cooldown_ms: 5000.0
+        coverage_memory_frames: 38
+        coverage_memory_ms: 1500.0

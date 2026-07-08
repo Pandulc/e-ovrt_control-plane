@@ -26,6 +26,10 @@ class PatternRegionConfig(BaseModel):
     y_min_ratio: float = 0.0
     y_max_ratio: float = 1.0
     x_margin_ratio: float = 0.0
+    # Pose no erguida: si ancho/alto de la caja del sujeto supera este ratio
+    # (persona agachada/inclinada), la banda vertical deja de ser representativa
+    # y la region se expande a la altura completa de la caja. None = desactivado.
+    full_height_aspect_ratio: float | None = None
 
 
 class PatternEvidenceConfig(BaseModel):
@@ -45,6 +49,11 @@ class PatternTimingConfig(BaseModel):
     # Cooldown de re-alerta por (patron, sujeto) tras un ciclo resolved->confirmed.
     realert_cooldown_frames: int | None = None
     realert_cooldown_ms: float | None = None
+    # Memoria de cobertura EPP: si el sujeto tuvo el EPP asociado hace menos de
+    # esta ventana, se lo sigue tratando como cubierto (amortigua parpadeo del
+    # detector y oclusiones breves). None = desactivado.
+    coverage_memory_frames: int | None = None
+    coverage_memory_ms: float | None = None
 
 
 class PatternDefinition(BaseModel):
