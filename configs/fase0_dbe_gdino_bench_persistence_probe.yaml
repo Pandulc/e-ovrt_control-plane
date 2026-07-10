@@ -1,0 +1,34 @@
+run:
+  id: bench_images_persistence_probe_20260710
+  scenario: DBE
+  name: bench_images_persistence_probe
+  description: >-
+    DIAGNOSTICO, no comparativo. `confirm_after_frames: 2` sobre una fuente no
+    temporal: cada imagen es su propia clave de estado, asi que hit_count nunca
+    supera 1 y la corrida NO PUEDE alertar. Verifica que ADR-013 lo declare
+    (causa persistence_unreachable_on_non_temporal_source) en vez de reportar
+    cero alertas en silencio.
+
+    (Su proposito original era capturar el warning de det_NNN, mecanismo que G0
+    retiro: el reemplazo semantico es la causa declarada.)
+
+input:
+  type: media_jsonl
+  path: ../../e-ovrt_media-plane/runs/run_20260710_025433_dbe_grounding_dino_91ae30/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_persistence_probe.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -65,6 +65,10 @@ class PatternDefinition(BaseModel):
     severity: str = "medium"
     subject_class: str = "person"
     required_absent_class: str
+    # G0 (ADR-002): la escena es el nucleo. `subject` es demostrativa; si un evento
+    # no trae track_id, el motor degrada a clave de escena (causa `no_track_id`)
+    # en lugar de exigirlo por validacion.
+    granularity: Literal["scene", "subject"] = "scene"
     region: PatternRegionConfig
     evidence: PatternEvidenceConfig = Field(default_factory=PatternEvidenceConfig)
     timing: PatternTimingConfig = Field(default_factory=PatternTimingConfig)

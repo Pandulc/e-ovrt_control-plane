@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import NAMESPACE_URL, uuid5
 
 from eovrt_control.config import PatternDefinition
@@ -25,6 +25,21 @@ class PatternRuntimeState:
     last_alert_frame: int | None = None
     last_covered_timestamp_ms: float | None = None
     last_covered_frame: int | None = None
+    max_subjects_in_evidence: int = 0
+
+
+def _memory_configured(pattern: PatternDefinition) -> bool:
+    return (
+        pattern.timing.coverage_memory_ms is not None
+        or pattern.timing.coverage_memory_frames is not None
+    )
+
+
+def _memory_applicable(pattern: PatternDefinition) -> bool:
+    """ADR-012: la memoria de cobertura es estado POR SUJETO a traves de frames.
+    Bajo escena no hay identidad de sujeto a la cual colgarla, asi que no se
+    aplica. Unico predicado: `_memory_covers` lo consulta en vez de repetirlo."""
+    return _memory_configured(pattern) and pattern.granularity == "subject"
 
 
 @dataclass(frozen=True)
@@ -33,6 +48,7 @@ class PatternEngineResult:
     alerts: list[AlertEvent]
     evidences_count: int
     subjects_count: int
+    degradation_causes: set[str] = field(default_factory=set)
 
 
 class PatternEngine:
@@ -48,17 +64,18 @@ class PatternEngine:
         alerts: list[AlertEvent] = []
         evidences_count = 0
         subjects_count = 0
+        degradation_causes: set[str] = set()
 
         for pattern in self.patterns:
             result = evaluate_spatial_absence(event, pattern)
             evidence_by_subject = {evidence.subject_key: evidence for evidence in result.evidences}
             evidences_count += len(result.evidences)
-            subjects_count += len(result.observed_subject_keys)
+            subjects_count += result.subjects_observed
+            degradation_causes |= result.degradation_causes
 
-            memory_enabled = (
-                pattern.timing.coverage_memory_ms is not None
-                or pattern.timing.coverage_memory_frames is not None
-            )
+            memory_enabled = _memory_applicable(pattern)
+            if _memory_configured(pattern) and not memory_enabled:
+                degradation_causes.add("coverage_memory_unsupported_scene")
 
             # Sujetos con cobertura real: registrar la cobertura y avanzar clear.
             clear_subjects = result.observed_subject_keys - set(evidence_by_subject)
@@ -107,6 +124,7 @@ class PatternEngine:
             alerts=alerts,
             evidences_count=evidences_count,
             subjects_count=subjects_count,
+            degradation_causes=degradation_causes,
         )
 
     def _advance_hit(
@@ -125,6 +143,8 @@ class PatternEngine:
         if runtime_state.state in {"inactive", "resolved"}:
             runtime_state.hit_count = 0
             runtime_state.first_hit_timestamp_ms = event.source.timestamp_ms
+            # Nuevo episodio: el maximo episodico arranca de cero.
+            runtime_state.max_subjects_in_evidence = 0
 
         if runtime_state.first_hit_timestamp_ms is None:
             runtime_state.first_hit_timestamp_ms = event.source.timestamp_ms
@@ -132,6 +152,11 @@ class PatternEngine:
         runtime_state.hit_count += 1
         runtime_state.clear_count = 0
         runtime_state.clear_started_timestamp_ms = None
+        # `subjects_in_evidence` siempre viene poblado (>=1) por el evaluador:
+        # una evidencia existe solo si hay al menos un sujeto descubierto.
+        runtime_state.max_subjects_in_evidence = max(
+            runtime_state.max_subjects_in_evidence, evidence.subjects_in_evidence
+        )
 
         if runtime_state.state in {"inactive", "resolved"}:
             runtime_state.state = (
@@ -148,7 +173,13 @@ class PatternEngine:
         if previous == runtime_state.state:
             return None
         return self._make_state_event(
-            event, pattern, subject_key, previous, runtime_state.state, evidence
+            event,
+            pattern,
+            subject_key,
+            previous,
+            runtime_state.state,
+            evidence,
+            subjects_in_evidence_max=runtime_state.max_subjects_in_evidence,
         )
 
     def _advance_clear(
@@ -175,6 +206,7 @@ class PatternEngine:
             return None
 
         previous = runtime_state.state
+        episode_max_subjects_in_evidence = runtime_state.max_subjects_in_evidence
         runtime_state.state = "resolved"
         runtime_state.hit_count = 0
         runtime_state.clear_count = 0
@@ -195,7 +227,13 @@ class PatternEngine:
             rationale="El sujeto observado ya no satisface el patron.",
         )
         return self._make_state_event(
-            event, pattern, subject_key, previous, "resolved", placeholder
+            event,
+            pattern,
+            subject_key,
+            previous,
+            "resolved",
+            placeholder,
+            subjects_in_evidence_max=episode_max_subjects_in_evidence,
         )
 
     def _memory_covers(
@@ -205,10 +243,10 @@ class PatternEngine:
         runtime_state: PatternRuntimeState,
     ) -> bool:
         """True si el sujeto tuvo cobertura real dentro de la ventana de memoria."""
+        if not _memory_applicable(pattern):
+            return False
         memory_ms = pattern.timing.coverage_memory_ms
         memory_frames = pattern.timing.coverage_memory_frames
-        if memory_ms is None and memory_frames is None:
-            return False
         if (
             memory_ms is not None
             and event.source.timestamp_ms is not None
@@ -251,6 +289,7 @@ class PatternEngine:
                 continue
 
             previous = runtime_state.state
+            episode_max_subjects_in_evidence = runtime_state.max_subjects_in_evidence
             runtime_state.state = "resolved"
             runtime_state.hit_count = 0
             runtime_state.clear_count = 0
@@ -272,7 +311,13 @@ class PatternEngine:
             )
             changes.append(
                 self._make_state_event(
-                    event, pattern, subject_key, previous, "resolved", placeholder
+                    event,
+                    pattern,
+                    subject_key,
+                    previous,
+                    "resolved",
+                    placeholder,
+                    subjects_in_evidence_max=episode_max_subjects_in_evidence,
                 )
             )
         for key in stale_keys:
@@ -338,6 +383,7 @@ class PatternEngine:
         previous_state: str,
         state: str,
         evidence: PatternEvidence,
+        subjects_in_evidence_max: int | None = None,
     ) -> PatternStateChanged:
         return PatternStateChanged(
             control_run_id=self.control_run_id,
@@ -353,6 +399,7 @@ class PatternEngine:
             evidence=evidence,
             frame_index=event.source.frame_index,
             timestamp_ms=event.source.timestamp_ms,
+            subjects_in_evidence_max=subjects_in_evidence_max,
         )
 
     def _maybe_alert(
@@ -418,4 +465,5 @@ class PatternEngine:
             evidence=change.evidence,
             frame_index=event.source.frame_index,
             timestamp_ms=event.source.timestamp_ms,
+            subjects_in_evidence_max=change.subjects_in_evidence_max,
         )

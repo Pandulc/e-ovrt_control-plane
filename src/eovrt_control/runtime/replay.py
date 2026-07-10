@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
 from time import perf_counter
 
 from eovrt_control.config import PatternDefinition, ReplayConfig, load_replay_config
-from eovrt_control.contracts.media import DetectionEvent
-from eovrt_control.contracts.metrics import ControlMetricSample, RunSummary
+from eovrt_control.contracts.metrics import ApplicabilityState, ControlMetricSample, RunSummary
 from eovrt_control.engine.pattern_engine import PatternEngine
 from eovrt_control.sinks.artifacts import RunArtifacts
 from eovrt_control.sinks.jsonl import JsonlSink
@@ -20,35 +18,65 @@ from eovrt_control.sinks.alerts_csv import export_alert_details_csv
 
 logger = logging.getLogger(__name__)
 
-_PERSON_LABELS = {"person", "worker", "human", "people"}
-_AUTOGEN_DETECTION_ID = re.compile(r"^det_\d+$")
-
 
 def _utc_now() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
-def _requires_temporal_persistence(pattern: PatternDefinition) -> bool:
-    return pattern.timing.confirm_after_frames > 1 or pattern.timing.confirm_after_ms is not None
+def _blocks_confirmation_on_non_temporal_source(pattern: PatternDefinition) -> bool:
+    """True si el patron NO PUEDE alertar jamas sobre una fuente no temporal.
+
+    Sobre imagenes independientes `source_id` cambia en cada unidad, asi que la
+    clave de estado tambien: `hit_count` nunca supera 1. Solo un umbral de
+    confirmacion por FRAMES > 1 vuelve la alerta inalcanzable.
+
+    Los umbrales en ms NO bloquean: `_confirmation_met` exige `timestamp_ms`, que
+    en imagenes es `None`, de modo que cae al camino por frames (default 1) y
+    confirma igual. Tampoco bloquean `resolve_*` ni la expiracion por ausencia:
+    gobiernan la salida del episodio, no su confirmacion. Verificado empiricamente.
+    """
+    return pattern.timing.confirm_after_frames > 1
 
 
-def _is_stable_subject_id(detection_id: str | None) -> bool:
-    """Un id es estable si viene del tracking o del media-plane, no del fallback det_NNN."""
-    if not detection_id:
-        return False
-    return _AUTOGEN_DETECTION_ID.match(detection_id) is None
+def _has_inert_temporal_thresholds(pattern: PatternDefinition) -> bool:
+    """True si el patron declara umbrales temporales que sobre una fuente no
+    temporal se ignoran EN SILENCIO (no bloquean, no se aplican).
+
+    Es una trampa distinta de la anterior y merece su propia causa: un operador
+    que declara `confirm_after_ms: 4000` sobre imagenes obtiene confirmacion
+    instantanea, no una ventana de 4 segundos.
+    """
+    timing = pattern.timing
+    return (
+        timing.confirm_after_ms is not None
+        or timing.resolve_after_ms is not None
+        or timing.resolve_after_frames > 1
+        or timing.subject_absent_timeout_frames is not None
+        or timing.subject_absent_timeout_ms is not None
+    )
 
 
-def _count_person_ids(event: DetectionEvent) -> tuple[int, int]:
-    persons = 0
-    stable = 0
-    for detection in event.detections:
-        if (detection.label or "").strip().lower() not in _PERSON_LABELS:
-            continue
-        persons += 1
-        if _is_stable_subject_id(detection.detection_id):
-            stable += 1
-    return persons, stable
+def _pattern_evaluation_state(
+    source_types: set[str], active_patterns: list[PatternDefinition]
+) -> ApplicabilityState:
+    """ADR-013: la temporalidad se detecta, no se configura."""
+    if not source_types:
+        # Ningun source_type observado: 0 unidades procesadas (input
+        # inexistente, vacio, o todas las lineas fallaron el parseo). No hay
+        # base para declarar la evaluacion "computed" (cero silencioso).
+        return ApplicabilityState(state="applicable_not_computed", causes=["no_units_processed"])
+    if len(source_types) > 1:
+        # Fuentes mixtas no tienen una semantica temporal coherente: no
+        # sabemos si tratar la corrida como temporal o no.
+        return ApplicabilityState(state="not_interpretable", causes=["mixed_source_types"])
+    if source_types <= {"image"}:
+        causes = ["non_temporal_source"]
+        if any(_blocks_confirmation_on_non_temporal_source(p) for p in active_patterns):
+            causes.append("persistence_unreachable_on_non_temporal_source")
+        if any(_has_inert_temporal_thresholds(p) for p in active_patterns):
+            causes.append("inert_temporal_thresholds")
+        return ApplicabilityState(state="not_applicable", causes=causes)
+    return ApplicabilityState(state="computed")
 
 
 def _control_run_id(config: ReplayConfig) -> str:
@@ -80,9 +108,8 @@ def run_replay(config_path: str | Path) -> RunSummary:
     pattern_events_count = 0
     alerts_count = 0
     errors_count = 0
-    persistence_required = any(_requires_temporal_persistence(p) for p in active_patterns)
-    persons_seen = 0
-    persons_with_stable_id = 0
+    degradation_causes: set[str] = set()
+    source_types: set[str] = set()
 
     with (
         JsonlSink(artifacts.pattern_events_path) as pattern_sink,
@@ -115,13 +142,17 @@ def run_replay(config_path: str | Path) -> RunSummary:
                 processing_ms = (perf_counter() - start) * 1000.0
 
                 media_run_ids.add(event.run_id)
+                source_types.add(event.source.source_type)
                 units_processed += 1
                 processing_times.append(processing_ms)
                 pattern_events_count += len(result.pattern_events)
                 alerts_count += len(result.alerts)
-                event_persons, event_stable = _count_person_ids(event)
-                persons_seen += event_persons
-                persons_with_stable_id += event_stable
+                # Senal en vivo: la degradacion se avisa la PRIMERA vez que
+                # aparece, no solo agregada en el summary al terminar. En una
+                # corrida larga (RTSP) el summary llega demasiado tarde.
+                for cause in result.degradation_causes - degradation_causes:
+                    logger.warning("Motor degradado: causa %r (unidad %s)", cause, event.unit_id)
+                degradation_causes |= result.degradation_causes
 
                 for pattern_event in result.pattern_events:
                     pattern_sink.write(pattern_event)
@@ -146,15 +177,13 @@ def run_replay(config_path: str | Path) -> RunSummary:
     export_alert_details_csv(artifacts.alerts_path, artifacts.alerts_csv_path)
 
     warnings: list[str] = []
-    if persistence_required and persons_seen > 0 and persons_with_stable_id == 0:
-        message = (
-            "Persistencia temporal inactiva: los patrones exigen confirmacion multi-frame "
-            "pero ninguna persona trae detection_id estable (solo fallback det_NNN). "
-            "El motor no podra confirmar condiciones; genera detecciones con tracking "
-            "(eovrt-labs generate-detections --track) o publica IDs estables desde el media-plane."
+    pattern_evaluation = _pattern_evaluation_state(source_types, active_patterns)
+    if pattern_evaluation.state != "computed":
+        logger.warning(
+            "Evaluacion de patrones %s: %s",
+            pattern_evaluation.state,
+            ", ".join(pattern_evaluation.causes) or "sin causa declarada",
         )
-        warnings.append(message)
-        logger.warning(message)
 
     summary = RunSummary(
         control_run_id=control_run_id,
@@ -178,6 +207,9 @@ def run_replay(config_path: str | Path) -> RunSummary:
             "summary": str(artifacts.summary_path),
         },
         warnings=warnings,
+        degraded=bool(degradation_causes),
+        degradation_causes=sorted(degradation_causes),
+        pattern_evaluation=pattern_evaluation,
         started_at=started_at,
         finished_at=_utc_now(),
     )

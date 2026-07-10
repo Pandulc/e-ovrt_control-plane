@@ -1,0 +1,29 @@
+run:
+  id: verify_rtsp_g0_fresh_20260710
+  scenario: EBE
+  name: verify_rtsp_g0_fresh
+  description: >-
+    Verificacion end-to-end real: media-plane con GDINO-tiny real sobre la
+    camara RTSP (192.168.1.5), esta sesion -> control-plane con el motor G0.
+    source_clock=wallclock (no dbe_media_time).
+
+input:
+  type: media_jsonl
+  path: ../../e-ovrt_media-plane/runs/run_20260710_011715_dbe_grounding_dino_fc965b/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_v2_probe.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO

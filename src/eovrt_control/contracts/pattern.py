@@ -21,6 +21,11 @@ class PatternEvidence(BaseModel):
     supporting: list[EvidenceRef] = Field(default_factory=list)
     score: float
     rationale: str
+    # G0 (spec 41 §2.1): cuantos sujetos aportan evidencia en esta unidad.
+    # Bajo `subject` con track_id es 1; si el patron degrada a escena por falta
+    # de track_id (causa `no_track_id`), la clave es de escena y puede ser >1.
+    # Insumo del GT clip_gt.v2.
+    subjects_in_evidence: int | None = None
 
 
 class PatternStateChanged(BaseModel):
@@ -39,4 +44,7 @@ class PatternStateChanged(BaseModel):
     evidence: PatternEvidence
     frame_index: int | None = None
     timestamp_ms: float | None = None
+    # Maximo episodico de PatternEvidence.subjects_in_evidence visto hasta este
+    # instante (spec 41 SS2.1, insumo del GT clip_gt.v2). Aditivo.
+    subjects_in_evidence_max: int | None = None
 

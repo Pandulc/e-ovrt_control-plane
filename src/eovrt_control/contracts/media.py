@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field, model_validator
 
 class Detection(BaseModel):
     detection_id: str | None = None
+    # Aditivo (spec 40 §1): identidad de sujeto emitida por el tracker del
+    # media-plane. Unica identidad valida entre frames; detection_id NO lo es.
+    track_id: str | None = None
     label: str
     prompt_id: str | None = None
     confidence: float

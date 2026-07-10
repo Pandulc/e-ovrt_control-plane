@@ -23,4 +23,7 @@ class AlertEvent(BaseModel):
     evidence: PatternEvidence
     frame_index: int | None = None
     timestamp_ms: float | None = None
+    # Maximo episodico de PatternEvidence.subjects_in_evidence (spec 41 SS2.1).
+    # Copiado del PatternStateChanged que confirmo la alerta. Aditivo.
+    subjects_in_evidence_max: int | None = None
 

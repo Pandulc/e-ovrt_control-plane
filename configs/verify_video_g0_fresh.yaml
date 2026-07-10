@@ -1,0 +1,29 @@
+run:
+  id: verify_video_g0_fresh_20260710
+  scenario: DBE
+  name: verify_video_g0_fresh
+  description: >-
+    Verificacion end-to-end real: media-plane con GDINO-tiny real (no mock,
+    no precomputado) sobre el video crudo recorte-1.mp4 (733 frames), esta
+    sesion -> control-plane con el motor G0 nuevo. granularity: scene.
+
+input:
+  type: media_jsonl
+  path: ../../e-ovrt_media-plane/runs/run_20260710_011320_dbe_grounding_dino_4be2cc/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_v2_probe.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO

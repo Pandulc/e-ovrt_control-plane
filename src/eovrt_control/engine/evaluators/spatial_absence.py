@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from eovrt_control.config import PatternDefinition
 from eovrt_control.contracts.media import Detection, DetectionEvent
@@ -26,6 +26,8 @@ LABEL_ALIASES: dict[str, set[str]] = {
 class PatternEvaluationResult:
     evidences: list[PatternEvidence]
     observed_subject_keys: set[str]
+    subjects_observed: int = 0
+    degradation_causes: set[str] = field(default_factory=set)
 
 
 def _normalize_label(value: str | None) -> str:
@@ -136,16 +138,29 @@ def _evidence_ref(detection: Detection) -> EvidenceRef:
     )
 
 
-def _subject_key(event: DetectionEvent, pattern: PatternDefinition, index: int, subject: Detection) -> str:
-    stable_id = subject.detection_id or f"{event.unit_id}:person:{index}"
-    return f"{pattern.id}:{event.source.source_id}:{stable_id}"
+def state_key(pattern: PatternDefinition, source_id: str, track_id: str | None) -> str:
+    """Clave de estado del motor (spec 41 §2.1).
+
+    Bajo `scene` la identidad es la fuente. Bajo `subject` es el track_id,
+    pero si `track_id` es `None` degrada a clave de escena (fallback, causa
+    `no_track_id`): no hay identidad de sujeto sin `track_id`.
+    `detection_id` NO se usa como identidad, nunca.
+    """
+    if pattern.granularity == "subject" and track_id is not None:
+        return f"{pattern.id}:{source_id}:{track_id}"
+    return f"{pattern.id}:{source_id}"
 
 
 def evaluate_spatial_absence(
     event: DetectionEvent,
     pattern: PatternDefinition,
 ) -> PatternEvaluationResult:
-    """Evalua si cada persona carece de una clase EPP asociada espacialmente."""
+    """Evalua si cada persona carece de una clase EPP asociada espacialmente.
+
+    Emite evidencias por CLAVE DE ESTADO, no por persona: bajo `scene` agrega los
+    sujetos en una unica evidencia ("la escena esta en evidencia si >=1 sujeto la
+    aporta", spec 41 §2.1); bajo `subject` emite una por track_id.
+    """
 
     subjects = [
         detection
@@ -164,27 +179,51 @@ def evaluate_spatial_absence(
     regions = [_region_bbox(subject.bbox_xyxy, pattern) for subject in subjects]
     covered = _match_epp_to_subjects(regions, required_items)
 
-    evidences: list[PatternEvidence] = []
+    source_id = event.source.source_id
     observed_subject_keys: set[str] = set()
+    # clave de estado -> sujetos descubiertos que la respaldan
+    uncovered_by_key: dict[str, list[Detection]] = {}
+
+    degradation_causes: set[str] = set()
+    # Fallback por FUENTE (spec 41 §2.1), no por deteccion: si una sola persona
+    # viene sin track_id, todo el evento de esta fuente se clavea a escena.
+    fallback_to_scene = pattern.granularity == "subject" and any(
+        subject.track_id is None for subject in subjects
+    )
+    if fallback_to_scene:
+        degradation_causes.add("no_track_id")
 
     for index, subject in enumerate(subjects):
-        subject_key = _subject_key(event, pattern, index, subject)
-        observed_subject_keys.add(subject_key)
+        track_id = None if fallback_to_scene else subject.track_id
+        key = state_key(pattern, source_id, track_id)
+        observed_subject_keys.add(key)
         if index in covered:
             continue
+        uncovered_by_key.setdefault(key, []).append(subject)
 
+    evidences: list[PatternEvidence] = []
+    for key, uncovered in uncovered_by_key.items():
+        # Representante: el sujeto mas confiable. Bajo `subject` hay exactamente uno.
+        representative = max(uncovered, key=lambda detection: detection.confidence)
         evidences.append(
             PatternEvidence(
                 pattern_id=pattern.id,
                 condition_id=pattern.condition_id,
-                subject_key=subject_key,
-                subject=_evidence_ref(subject),
+                subject_key=key,
+                subject=_evidence_ref(representative),
                 missing_class=pattern.required_absent_class,
-                supporting=[],
-                score=subject.confidence,
+                # Los demas sujetos descubiertos NO se pierden al agregar a escena:
+                # la evaluacion por persona del BENCH (person_gt) junta por bbox.
+                supporting=[
+                    _evidence_ref(subject)
+                    for subject in uncovered
+                    if subject is not representative
+                ],
+                score=representative.confidence,
+                subjects_in_evidence=len(uncovered),
                 rationale=(
                     f"No se encontro evidencia '{pattern.required_absent_class}' "
-                    f"en region '{pattern.region.type}' del sujeto."
+                    f"en region '{pattern.region.type}' de {len(uncovered)} sujeto(s)."
                 ),
             )
         )
@@ -192,5 +231,7 @@ def evaluate_spatial_absence(
     return PatternEvaluationResult(
         evidences=evidences,
         observed_subject_keys=observed_subject_keys,
+        subjects_observed=len(subjects),
+        degradation_causes=degradation_causes,
     )
 

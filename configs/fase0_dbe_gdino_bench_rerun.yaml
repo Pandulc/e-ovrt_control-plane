@@ -1,0 +1,36 @@
+run:
+  id: bench_images_g0_20260710
+  scenario: DBE
+  name: bench_images_g0
+  description: >-
+    Corrida del motor G0 sobre imagenes del BENCH. Verifica ADR-013 (fuente no
+    temporal detectada) y el comportamiento de escena sobre imagenes
+    independientes.
+
+    OJO: el input original de la Fase 0 (run_20260704_205708, 82 unidades) fue
+    podado del disco. Este config apunta a una regeneracion fresca de GDINO-tiny
+    sobre bench_v2_val (114 imagenes, 2026-07-10), asi que sus numeros NO son
+    comparables con los del doc 33 §2. La comparacion motor-viejo-vs-nuevo de ese
+    doc queda archivada en docs/operacion/datos/33-*.datos.json y no es
+    reproducible.
+
+input:
+  type: media_jsonl
+  path: ../../e-ovrt_media-plane/runs/run_20260710_025433_dbe_grounding_dino_91ae30/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_v1.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO
