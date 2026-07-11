@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from uuid import NAMESPACE_URL, uuid5
 
@@ -26,6 +27,12 @@ class PatternRuntimeState:
     last_covered_timestamp_ms: float | None = None
     last_covered_frame: int | None = None
     max_subjects_in_evidence: int = 0
+    # Hito de primera evidencia positiva del episodio (spec 40 SS5.2.4): instante
+    # monotonico de recepcion (no confundir con first_hit_timestamp_ms, que es
+    # tiempo de fuente/frame). No se reescribe hasta resolve/expire.
+    first_evidence_monotonic_ms: float | None = None
+    first_evidence_unit_id: str | None = None
+    first_evidence_frame_index: int | None = None
 
 
 def _memory_configured(pattern: PatternDefinition) -> bool:
@@ -54,12 +61,28 @@ class PatternEngineResult:
 class PatternEngine:
     """Evalua patrones configurados y mantiene estado temporal simple."""
 
-    def __init__(self, control_run_id: str, patterns: list[PatternDefinition]) -> None:
+    def __init__(
+        self,
+        control_run_id: str,
+        patterns: list[PatternDefinition],
+        experiment_id: str | None = None,
+    ) -> None:
         self.control_run_id = control_run_id
         self.patterns = patterns
+        # ADR-004: identificador de experimento, propagado a cada evento
+        # emitido por este motor (no solo al RunSummary).
+        self.experiment_id = experiment_id
         self._state: dict[tuple[str, str], PatternRuntimeState] = {}
+        # Instante monotonico de recepcion de la unidad en curso (Task 2);
+        # process() lo actualiza en cada llamada.
+        self._current_ts_receive_ms: float | None = None
 
-    def process(self, event: DetectionEvent) -> PatternEngineResult:
+    def process(
+        self, event: DetectionEvent, ts_receive_ms: float | None = None
+    ) -> PatternEngineResult:
+        # Instante monotonico de recepcion de esta unidad; lo leen los helpers
+        # de emision durante este process() para el hito first_evidence_*.
+        self._current_ts_receive_ms = ts_receive_ms
         pattern_events: list[PatternStateChanged] = []
         alerts: list[AlertEvent] = []
         evidences_count = 0
@@ -149,6 +172,11 @@ class PatternEngine:
         if runtime_state.first_hit_timestamp_ms is None:
             runtime_state.first_hit_timestamp_ms = event.source.timestamp_ms
 
+        if runtime_state.first_evidence_monotonic_ms is None:
+            runtime_state.first_evidence_monotonic_ms = self._current_ts_receive_ms
+            runtime_state.first_evidence_unit_id = event.unit_id
+            runtime_state.first_evidence_frame_index = event.source.frame_index
+
         runtime_state.hit_count += 1
         runtime_state.clear_count = 0
         runtime_state.clear_started_timestamp_ms = None
@@ -180,6 +208,9 @@ class PatternEngine:
             runtime_state.state,
             evidence,
             subjects_in_evidence_max=runtime_state.max_subjects_in_evidence,
+            first_evidence_ms=runtime_state.first_evidence_monotonic_ms,
+            first_evidence_unit_id=runtime_state.first_evidence_unit_id,
+            first_evidence_frame_index=runtime_state.first_evidence_frame_index,
         )
 
     def _advance_clear(
@@ -207,11 +238,17 @@ class PatternEngine:
 
         previous = runtime_state.state
         episode_max_subjects_in_evidence = runtime_state.max_subjects_in_evidence
+        episode_first_evidence_ms = runtime_state.first_evidence_monotonic_ms
+        episode_first_evidence_unit_id = runtime_state.first_evidence_unit_id
+        episode_first_evidence_frame_index = runtime_state.first_evidence_frame_index
         runtime_state.state = "resolved"
         runtime_state.hit_count = 0
         runtime_state.clear_count = 0
         runtime_state.first_hit_timestamp_ms = None
         runtime_state.clear_started_timestamp_ms = None
+        runtime_state.first_evidence_monotonic_ms = None
+        runtime_state.first_evidence_unit_id = None
+        runtime_state.first_evidence_frame_index = None
         placeholder = PatternEvidence(
             pattern_id=pattern.id,
             condition_id=pattern.condition_id,
@@ -234,6 +271,9 @@ class PatternEngine:
             "resolved",
             placeholder,
             subjects_in_evidence_max=episode_max_subjects_in_evidence,
+            first_evidence_ms=episode_first_evidence_ms,
+            first_evidence_unit_id=episode_first_evidence_unit_id,
+            first_evidence_frame_index=episode_first_evidence_frame_index,
         )
 
     def _memory_covers(
@@ -290,11 +330,17 @@ class PatternEngine:
 
             previous = runtime_state.state
             episode_max_subjects_in_evidence = runtime_state.max_subjects_in_evidence
+            episode_first_evidence_ms = runtime_state.first_evidence_monotonic_ms
+            episode_first_evidence_unit_id = runtime_state.first_evidence_unit_id
+            episode_first_evidence_frame_index = runtime_state.first_evidence_frame_index
             runtime_state.state = "resolved"
             runtime_state.hit_count = 0
             runtime_state.clear_count = 0
             runtime_state.first_hit_timestamp_ms = None
             runtime_state.clear_started_timestamp_ms = None
+            runtime_state.first_evidence_monotonic_ms = None
+            runtime_state.first_evidence_unit_id = None
+            runtime_state.first_evidence_frame_index = None
             placeholder = PatternEvidence(
                 pattern_id=pattern.id,
                 condition_id=pattern.condition_id,
@@ -318,6 +364,9 @@ class PatternEngine:
                     "resolved",
                     placeholder,
                     subjects_in_evidence_max=episode_max_subjects_in_evidence,
+                    first_evidence_ms=episode_first_evidence_ms,
+                    first_evidence_unit_id=episode_first_evidence_unit_id,
+                    first_evidence_frame_index=episode_first_evidence_frame_index,
                 )
             )
         for key in stale_keys:
@@ -384,6 +433,9 @@ class PatternEngine:
         state: str,
         evidence: PatternEvidence,
         subjects_in_evidence_max: int | None = None,
+        first_evidence_ms: float | None = None,
+        first_evidence_unit_id: str | None = None,
+        first_evidence_frame_index: int | None = None,
     ) -> PatternStateChanged:
         return PatternStateChanged(
             control_run_id=self.control_run_id,
@@ -400,6 +452,10 @@ class PatternEngine:
             frame_index=event.source.frame_index,
             timestamp_ms=event.source.timestamp_ms,
             subjects_in_evidence_max=subjects_in_evidence_max,
+            first_evidence_ms=first_evidence_ms,
+            first_evidence_unit_id=first_evidence_unit_id,
+            first_evidence_frame_index=first_evidence_frame_index,
+            experiment_id=self.experiment_id,
         )
 
     def _maybe_alert(
@@ -412,7 +468,7 @@ class PatternEngine:
         runtime_state = self._state.get((pattern.id, change.subject_key))
         if runtime_state is not None and not self._cooldown_ok(event, pattern, runtime_state):
             return None
-        alert = self._make_alert(event, pattern, change)
+        alert = self._make_alert(event, pattern, change, runtime_state)
         if runtime_state is not None:
             runtime_state.last_alert_timestamp_ms = event.source.timestamp_ms
             runtime_state.last_alert_frame = event.source.frame_index
@@ -447,6 +503,7 @@ class PatternEngine:
         event: DetectionEvent,
         pattern: PatternDefinition,
         change: PatternStateChanged,
+        runtime_state: PatternRuntimeState | None,
     ) -> AlertEvent:
         seed = (
             f"{self.control_run_id}:{event.run_id}:{event.unit_id}:"
@@ -466,4 +523,18 @@ class PatternEngine:
             frame_index=event.source.frame_index,
             timestamp_ms=event.source.timestamp_ms,
             subjects_in_evidence_max=change.subjects_in_evidence_max,
+            # Instante monotonico de escritura de la alerta (spec 40 SS5.2.4).
+            alert_registered_ms=time.monotonic() * 1000.0,
+            # Hito de primera evidencia del episodio, copiado del mismo
+            # runtime_state que uso el PatternStateChanged que confirmo.
+            first_evidence_ms=runtime_state.first_evidence_monotonic_ms
+            if runtime_state is not None
+            else None,
+            first_evidence_unit_id=runtime_state.first_evidence_unit_id
+            if runtime_state is not None
+            else None,
+            first_evidence_frame_index=runtime_state.first_evidence_frame_index
+            if runtime_state is not None
+            else None,
+            experiment_id=self.experiment_id,
         )

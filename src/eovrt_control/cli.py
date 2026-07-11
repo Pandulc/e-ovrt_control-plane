@@ -9,6 +9,7 @@ from rich.console import Console
 
 from eovrt_control.config import load_replay_config
 from eovrt_control.evaluation import evaluate_temporal_alerts
+from eovrt_control.runtime.live import run_live
 from eovrt_control.runtime.replay import run_replay
 
 
@@ -33,6 +34,27 @@ def replay(config: Path) -> None:
     console.print(f"Resumen: {summary.output_files['summary']}")
     for warning in summary.warnings:
         console.print(f"[yellow]Advertencia:[/yellow] {warning}")
+
+
+@app.command()
+def live(config: Path) -> None:
+    """Consume el bus del media-plane en vivo (input.type='bus').
+
+    Advertencia operativa: `eovrt-control live` se suscribe recien al
+    ejecutarse. Si el run del media-plane ya esta corriendo, se pierden los
+    eventos previos. El camino correcto es levantar `live` primero y disparar
+    el run despues (o usar `wait_for_subscriber_ms` del lado del publicador).
+    """
+    summary = run_live(config)
+    console.print(f"Control run: {summary.control_run_id}")
+    console.print(f"Media run: {summary.media_run_id}")
+    console.print(f"Unidades procesadas: {summary.units_processed}")
+    console.print(f"Alertas: {summary.alerts_count}")
+    if summary.bus_dropped_events:
+        console.print(
+            f"[yellow]Bus degradado:[/yellow] {summary.bus_dropped_events} eventos perdidos"
+        )
+    console.print(f"Resumen: {summary.output_files['summary']}")
 
 
 @app.command("evaluate-alerts")
@@ -76,6 +98,19 @@ def export_alerts_csv(
 
     output_path = export_alert_details_csv(alerts, output, stage=stage)
     console.print(f"CSV de alertas: {output_path}")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("0.0.0.0", help="Interfaz de escucha."),
+    port: int = typer.Option(8081, help="Puerto (el media-plane usa 8080)."),
+) -> None:
+    """Levanta el servicio HTTP del plano de control (ADR-008)."""
+    import uvicorn
+
+    uvicorn.run(
+        "eovrt_control.service.app:create_app", host=host, port=port, factory=True
+    )
 
 
 if __name__ == "__main__":

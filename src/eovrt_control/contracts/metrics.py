@@ -28,6 +28,12 @@ class ControlMetricSample(BaseModel):
     pattern_events_count: int
     alerts_count: int
     processing_ms: float
+    # Aditivo (instrumentacion t_capture->alert): instante monotonico de
+    # recepcion de la unidad en ms. None si la fuente no lo provee.
+    ts_receive_ms: float | None = None
+    # ADR-004: identificador de experimento, propagado desde config.run (no
+    # solo al RunSummary). Aditivo.
+    experiment_id: str | None = None
 
 
 class RunSummary(BaseModel):
@@ -43,10 +49,24 @@ class RunSummary(BaseModel):
     alerts_count: int
     errors_count: int
     avg_processing_ms: float
+    # Aditivos (Task 5): percentiles deterministas de latencia. `percentiles`
+    # ya centraliza el calculo en metrics/latency.py, reusado por Task 8.
+    processing_ms_percentiles: dict[str, float] | None = None
+    # TTFA interna (diagnostico): alert_registered_ms - first_evidence_ms,
+    # ambos monotonicos del host de control (no incluye latencia del media-plane).
+    ttfa_internal_ms_percentiles: dict[str, float] | None = None
     output_files: dict[str, str]
     warnings: list[str] = Field(default_factory=list)
     degraded: bool = False
     degradation_causes: list[str] = Field(default_factory=list)
+    # Aditivos (spec 41 SS4): trazabilidad de la corrida live 1:1. `media_run_id`
+    # es el run del media-plane con el que esta corrida es 1:1 (None si la
+    # entrada mezclo varios). `source` declara por que camino llegaron los
+    # eventos. `bus_dropped_events` > 0 implica corrida degradada (ADR-003).
+    media_run_id: str | None = None
+    experiment_id: str | None = None
+    source: str = "jsonl"
+    bus_dropped_events: int = 0
     # Aditivo (ADR-013): declara si la evaluacion de patrones (episodios,
     # persistencia, histeresis) aplico sobre esta corrida. None = corridas
     # previas a esta task, que no lo calculaban.

@@ -258,3 +258,24 @@ def test_frame_threshold_on_images_is_genuinely_unreachable(tmp_path) -> None:
 
     assert summary.alerts_count == 0
     assert "persistence_unreachable_on_non_temporal_source" in summary.pattern_evaluation.causes
+
+
+def test_replay_summary_declares_jsonl_source_and_media_run_id(tmp_path) -> None:
+    """Spec 41 SS4: el summary declara de que fuente vino la corrida."""
+    summary = run_replay(_write_config(tmp_path))
+
+    assert summary.source == "jsonl"
+    assert summary.bus_dropped_events == 0
+    assert summary.media_run_id == summary.media_run_ids[0]
+
+
+def test_replay_summary_carries_experiment_id(tmp_path) -> None:
+    """Spec 41 SS8.1: experiment_id viaja de la config al summary."""
+    config_path = _write_config(tmp_path)
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["run"]["experiment_id"] = "exp-42"
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    summary = run_replay(config_path)
+
+    assert summary.experiment_id == "exp-42"

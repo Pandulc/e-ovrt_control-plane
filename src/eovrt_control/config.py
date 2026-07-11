@@ -14,11 +14,43 @@ class RunSection(BaseModel):
     scenario: str = "DBE"
     name: str = "control_replay"
     description: str | None = None
+    # ADR-004: clave de la corrida paraguas; viaja al summary y a los eventos.
+    experiment_id: str | None = None
+
+
+class BusFinishSection(BaseModel):
+    """Como se entera el consumidor de que la corrida termino (spec 41 SS3)."""
+
+    signal: Literal["run_lifecycle"] = "run_lifecycle"
+    # Fallback por polling de GET /api/runs/{id} del media-plane.
+    poll_url: str | None = None
+    poll_interval_s: float = 5.0
+
+
+class BusInputSection(BaseModel):
+    endpoint: str
+    topics: list[str] = Field(
+        default_factory=lambda: ["media.detection.v1.", "run.lifecycle.v1."]
+    )
+    hwm: int = 1000
+    recv_timeout_ms: int = 1000
+    # Corte de seguridad si el publicador muere sin `run_finished` y no hay poll_url.
+    idle_timeout_s: float = 300.0
+    finish: BusFinishSection = Field(default_factory=BusFinishSection)
 
 
 class InputSection(BaseModel):
-    type: str = "media_jsonl"
-    path: str
+    type: Literal["media_jsonl", "bus"] = "media_jsonl"
+    path: str | None = None
+    bus: BusInputSection | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "InputSection":
+        if self.type == "media_jsonl" and not self.path:
+            raise ValueError("input.type='media_jsonl' requiere input.path")
+        if self.type == "bus" and self.bus is None:
+            raise ValueError("input.type='bus' requiere input.bus")
+        return self
 
 
 class PatternRegionConfig(BaseModel):
@@ -112,21 +144,25 @@ class LoggingSection(BaseModel):
     level: str = "INFO"
 
 
+class AlertBusSection(BaseModel):
+    """Publisher de alertas control->distribucion (spec 41 SS8). Apagado por default."""
+
+    enabled: bool = False
+    endpoint: str = "tcp://0.0.0.0:5558"
+    hwm: int = Field(default=1000, gt=0)
+    wait_for_subscriber_ms: int = Field(default=0, ge=0)
+
+
 class ReplayConfig(BaseModel):
     run: RunSection
     input: InputSection
     patterns: PatternsSection
     outputs: OutputsSection = Field(default_factory=OutputsSection)
     logging: LoggingSection = Field(default_factory=LoggingSection)
+    alert_bus: AlertBusSection = Field(default_factory=AlertBusSection)
 
     config_path: Path | None = Field(default=None, exclude=True)
     patterns_file: PatternsFile | None = Field(default=None, exclude=True)
-
-    @model_validator(mode="after")
-    def validate_input_type(self) -> "ReplayConfig":
-        if self.input.type != "media_jsonl":
-            raise ValueError("Por ahora solo se soporta input.type='media_jsonl'")
-        return self
 
     def resolve_path(self, raw_path: str) -> Path:
         path = Path(raw_path)
@@ -153,4 +189,28 @@ def load_replay_config(path: str | Path) -> ReplayConfig:
     config.config_path = config_path
     patterns_path = config.resolve_path(config.patterns.file)
     config.patterns_file = load_patterns_file(patterns_path)
+    return config
+
+
+# Rutas que, si la config viene por PAYLOAD, deben ser absolutas: sin `config_path`
+# no hay contra que resolver una relativa (caeria contra el CWD del servicio, que
+# es ambiguo). Regla anti-ambiguedad de spec 41 SS9 / ADR-009.
+_PAYLOAD_PATH_FIELDS = ("patterns.file", "input.path", "outputs.base_dir")
+
+
+def load_replay_config_data(data: dict[str, Any]) -> ReplayConfig:
+    """Carga una config recibida por payload (ADR-009), sin archivo de respaldo."""
+    config = ReplayConfig.model_validate(data)
+    raw_by_field = {
+        "patterns.file": config.patterns.file,
+        "input.path": config.input.path,
+        "outputs.base_dir": config.outputs.base_dir,
+    }
+    for field in _PAYLOAD_PATH_FIELDS:
+        raw = raw_by_field[field]
+        if raw is not None and not Path(raw).is_absolute():
+            raise ValueError(
+                f"Config por payload: `{field}` debe ser una ruta absoluta, no {raw!r}"
+            )
+    config.patterns_file = load_patterns_file(config.patterns.file)
     return config

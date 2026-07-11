@@ -439,6 +439,135 @@ def test_alert_carries_episode_max_subjects_in_evidence() -> None:
     assert result.alerts[0].subjects_in_evidence_max == 2
 
 
+def test_first_evidence_milestone_captured_on_episode_open() -> None:
+    pattern = _helmet_pattern(
+        granularity="scene", timing=PatternTimingConfig(confirm_after_frames=1)
+    )
+    engine = PatternEngine("run-1", [pattern])
+
+    ev = _event(7, [_person([0, 0, 100, 200])])
+    result = engine.process(ev, ts_receive_ms=1234.5)
+
+    opened = [e for e in result.pattern_events if e.state in ("candidate", "confirmed")]
+    assert opened, "deberia abrir un episodio"
+    e0 = opened[0]
+    assert e0.first_evidence_unit_id == "img_000007"
+    assert e0.first_evidence_frame_index == 7
+    assert e0.first_evidence_ms == 1234.5
+
+
+def test_first_evidence_persists_across_units_until_resolve() -> None:
+    # confirm_after_frames=2: el primer evento abre candidate (episodio),
+    # el segundo lo confirma (transicion) -- ambos con la misma persona sin
+    # casco, para que el hito de primera evidencia se pueda comparar entre
+    # unidades distintas dentro del mismo episodio.
+    pattern = _helmet_pattern(
+        granularity="scene", timing=PatternTimingConfig(confirm_after_frames=2)
+    )
+    engine = PatternEngine("run-1", [pattern])
+
+    engine.process(_event(1, [_person([0, 0, 100, 200])]), ts_receive_ms=100.0)
+    result2 = engine.process(_event(2, [_person([0, 0, 100, 200])]), ts_receive_ms=200.0)
+
+    opened = [e for e in result2.pattern_events if e.first_evidence_unit_id is not None]
+    assert opened, "la segunda unidad deberia confirmar el episodio abierto por la primera"
+    # el hito de primera evidencia NO se reescribe con la segunda unidad
+    assert all(e.first_evidence_unit_id == "img_000001" for e in opened)
+    assert all(e.first_evidence_ms == 100.0 for e in opened)
+
+
+def test_alert_carries_registered_and_first_evidence(monkeypatch) -> None:
+    """La alerta estampa alert_registered_ms (monotonico, propio del proceso)
+    y propaga el hito first_evidence_* copiado del PatternRuntimeState."""
+    pattern = _helmet_pattern(
+        granularity="scene", timing=PatternTimingConfig(confirm_after_frames=1)
+    )
+    engine = PatternEngine("run-1", [pattern])
+    monkeypatch.setattr("eovrt_control.engine.pattern_engine.time.monotonic", lambda: 5.0)
+
+    result = engine.process(_event(3, [_person([0, 0, 100, 200])]), ts_receive_ms=4000.0)
+
+    assert result.alerts, "CR-01 confirma en 1 frame"
+    alert = result.alerts[0]
+    assert alert.alert_registered_ms == 5000.0  # 5.0 s -> 5000 ms
+    assert alert.first_evidence_unit_id == "img_000003"
+    assert alert.first_evidence_ms == 4000.0
+    assert alert.first_evidence_frame_index == 3
+
+
+def test_experiment_id_threads_into_events() -> None:
+    """Task 4: experiment_id (ADR-004) viaja del ctor del motor a los eventos
+    de patron y a las alertas, no solo al RunSummary."""
+    pattern = _helmet_pattern(
+        granularity="scene", timing=PatternTimingConfig(confirm_after_frames=1)
+    )
+    engine = PatternEngine("run-1", [pattern], experiment_id="exp-42")
+
+    result = engine.process(_event(0, [_person([0, 0, 100, 200])]))
+
+    assert result.pattern_events
+    assert all(e.experiment_id == "exp-42" for e in result.pattern_events)
+    assert result.alerts
+    assert all(a.experiment_id == "exp-42" for a in result.alerts)
+
+
+def test_cr01_cr02_v2_scene_flicker_within_resolve_window_does_not_realert() -> None:
+    """Task 6 / ADR-012: falsacion sobre el pattern set OFICIAL (spec 41 SS7).
+
+    Carga configs/patterns/cr01_cr02_v2.yaml (sin overrides sinteticos) y
+    ejercita la histeresis real de CR-01: confirm_after_ms=4000, resolve_
+    after_ms=2000. El casco reaparece durante DOS frames de cobertura (t=4100
+    y t=4600, elapsed=500ms entre ambos desde que empezo el clear) — muy por
+    debajo de los 2000ms de resolve — y el episodio NO debe transicionar a
+    `resolved` ni disparar una re-alerta. Es clave tener DOS frames de clear
+    (no uno solo): la resolucion se evalua como tiempo transcurrido *desde el
+    primer clear*, asi que con un unico frame de clear el elapsed siempre es
+    0 y la ventana nunca se ejercita de verdad, sin importar su valor. Se
+    verifico manualmente que, si resolve_after_ms se achica (p. ej. a 100ms
+    en el YAML), el segundo frame de clear (elapsed=500ms >= 100ms) SI
+    transiciona a `resolved` — este test la falsaria en ese caso.
+    """
+    patterns_file = load_patterns_file("configs/patterns/cr01_cr02_v2.yaml")
+    cr01 = next(p for p in patterns_file.pattern_set.patterns if p.condition_id == "CR-01")
+    assert cr01.timing.confirm_after_ms == 4000.0
+    assert cr01.timing.resolve_after_ms == 2000.0
+
+    engine = PatternEngine("run-1", [cr01])
+
+    # t=0ms: persona sin casco -> abre episodio (candidate, elapsed=0 < 4000).
+    opened = engine.process(_event(0, [_person([0, 0, 100, 200])], timestamp_ms=0.0))
+    assert [e.state for e in opened.pattern_events] == ["candidate"]
+    assert opened.alerts == []
+
+    # t=4000ms: sigue sin casco, elapsed=4000 >= 4000 -> confirma y alerta.
+    confirmed = engine.process(_event(1, [_person([0, 0, 100, 200])], timestamp_ms=4000.0))
+    assert [e.state for e in confirmed.pattern_events] == ["confirmed"]
+    assert len(confirmed.alerts) == 1
+
+    # t=4100ms: el casco aparece (parpadeo del detector) -> clear_started=4100,
+    # elapsed=0 < 2000, no resuelve todavia.
+    flicker_clear_start = engine.process(
+        _event(2, [_person([0, 0, 100, 200]), _helmet([40, 10, 60, 30])], timestamp_ms=4100.0)
+    )
+    assert flicker_clear_start.pattern_events == []
+
+    # t=4600ms: el casco sigue presente -> segundo frame de clear, elapsed
+    # desde clear_started = 500ms, todavia < 2000ms: sigue sin resolver.
+    flicker_clear_hold = engine.process(
+        _event(3, [_person([0, 0, 100, 200]), _helmet([40, 10, 60, 30])], timestamp_ms=4600.0)
+    )
+    assert flicker_clear_hold.pattern_events == []
+
+    # t=4700ms: el casco desaparece de nuevo -- hueco total de 500ms (< 2000ms).
+    resumed = engine.process(_event(4, [_person([0, 0, 100, 200])], timestamp_ms=4700.0))
+
+    # No debe haber transicion a `resolved` ni una nueva alerta dentro de la
+    # ventana de resolve (ADR-012). El hit sobre el estado `confirmed` emite
+    # confirmed->sustained, lo cual es correcto y no invalida la apuesta.
+    assert not any(e.state == "resolved" for e in resumed.pattern_events)
+    assert resumed.alerts == [], "no debe re-alertar dentro de la ventana de resolve (ADR-012)"
+
+
 def test_max_subjects_resets_on_new_episode() -> None:
     pattern = _helmet_pattern(
         granularity="scene",

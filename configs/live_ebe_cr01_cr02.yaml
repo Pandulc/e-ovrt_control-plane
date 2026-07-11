@@ -1,0 +1,34 @@
+# Corrida live (EBE): el motor consume el bus del media-plane (ADR-003, spec 41 SS4).
+# Levantar ESTA corrida ANTES de disparar el run en el media-plane: el SUB debe
+# estar suscripto antes del primer evento (spec 40 SS3.2 regla 1).
+run:
+  scenario: EBE
+  name: control_live_cr01_cr02
+  description: Corrida live 1:1 con un run del media-plane
+  experiment_id: null
+
+input:
+  type: bus
+  bus:
+    endpoint: tcp://127.0.0.1:5557
+    topics:
+      - media.detection.v1.
+      - run.lifecycle.v1.
+    hwm: 1000
+    recv_timeout_ms: 1000
+    idle_timeout_s: 300
+    finish:
+      signal: run_lifecycle
+      # Descomentar con el run_id real para habilitar el fallback por polling:
+      # poll_url: http://localhost:8080/api/runs/<media_run_id>
+      poll_url: null
+      poll_interval_s: 5
+
+patterns:
+  file: patterns/cr01_cr02_v1.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs

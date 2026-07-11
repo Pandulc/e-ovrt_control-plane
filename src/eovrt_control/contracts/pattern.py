@@ -47,4 +47,13 @@ class PatternStateChanged(BaseModel):
     # Maximo episodico de PatternEvidence.subjects_in_evidence visto hasta este
     # instante (spec 41 SS2.1, insumo del GT clip_gt.v2). Aditivo.
     subjects_in_evidence_max: int | None = None
+    # Hito de primera evidencia positiva del episodio (spec 40 SS5.2.4): instante
+    # monotonico de recepcion, unit_id (clave de join) y frame_index de la unidad
+    # que abrio el episodio. Se mantiene fijo hasta resolve/expire. Aditivo.
+    first_evidence_ms: float | None = None
+    first_evidence_unit_id: str | None = None
+    first_evidence_frame_index: int | None = None
+    # ADR-004: identificador de experimento, propagado desde config.run al
+    # motor y de ahi a cada evento (no solo al RunSummary). Aditivo.
+    experiment_id: str | None = None
 

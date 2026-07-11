@@ -1,38 +1,19 @@
-"""Lectura de eventos JSONL del plano de medios."""
+"""Alias de compatibilidad. La implementacion vive en `sources/jsonl.py`.
+
+`iter_media_jsonl` se conserva porque hay configs y codigo externo que la
+importan por nombre (spec 41 SS3: "renombre ... (compat: alias)").
+"""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from pathlib import Path
 
-from pydantic import ValidationError
+from eovrt_control.sources.base import SourceItem
+from eovrt_control.sources.jsonl import JsonlSource
 
-from eovrt_control.contracts.errors import ErrorEvent
-from eovrt_control.contracts.media import DetectionEvent
+__all__ = ["JsonlSource", "iter_media_jsonl"]
 
 
-def iter_media_jsonl(
-    path: Path,
-    control_run_id: str,
-) -> Iterator[tuple[int, DetectionEvent | None, ErrorEvent | None]]:
-    with path.open("r", encoding="utf-8") as fh:
-        for line_number, line in enumerate(fh, start=1):
-            raw = line.strip()
-            if not raw:
-                continue
-            try:
-                data = json.loads(raw)
-                yield line_number, DetectionEvent.model_validate(data), None
-            except (json.JSONDecodeError, ValidationError) as exc:
-                yield (
-                    line_number,
-                    None,
-                    ErrorEvent(
-                        control_run_id=control_run_id,
-                        message=str(exc),
-                        error_type=type(exc).__name__,
-                        line_number=line_number,
-                    ),
-                )
-
+def iter_media_jsonl(path: Path, control_run_id: str) -> Iterator[SourceItem]:
+    yield from JsonlSource(path, control_run_id)

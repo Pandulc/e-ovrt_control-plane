@@ -8,12 +8,17 @@ dependencies = [
     "pyyaml",
     "typer",
     "rich",
+    "pyzmq",
+    "msgpack",
+    "fastapi>=0.110",
+    "uvicorn[standard]",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "ruff",
+    "httpx",
 ]
 labs = [
     "torch",
@@ -44,4 +49,7 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: usa ZeroMQ sobre localhost (spec 40 SS3.4, test de paridad)",
+]
 
