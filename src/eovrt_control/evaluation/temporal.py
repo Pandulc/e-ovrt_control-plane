@@ -49,37 +49,96 @@ class TemporalGroundTruth(BaseModel):
     expected_alerts: list[ExpectedAlert] = Field(default_factory=list)
 
 
-class ClipEpisode(BaseModel):
-    """Episodio a nivel escena-condicion (o subject) del schema clip_gt.v2."""
+class SubThresholdEvent(BaseModel):
+    """Evento real pero no alertable (spec 43 SS4.1): permite distinguir un FP
+    verdadero de una alerta a un evento sub-umbral."""
+
+    condition_id: str
+    start_ms: float
+    end_ms: float
+    reason: str | None = None
+
+
+class ClipEpisodeV2(BaseModel):
+    """Episodio escena-condicion (o subject) del schema clip_gt.v2 (spec 43 SS4), en ms."""
 
     id: str
     condition_id: str
     level: Literal["scene", "subject"] = "scene"
     source_id: str | None = None
     subject_key: str | None = None
-    first_evidence_frame_index: int
-    expected_alert_frame_index: int
-    max_alert_frame_index: int | None = None
-    first_evidence_timestamp_ms: float | None = None
+    start_ms: float  # inicio anotado de la condicion (t0 oficial, spec 43 SS4.1)
+    end_ms: float
     subjects_in_evidence: int | None = None
 
     @model_validator(mode="after")
-    def _require_key_for_level(self) -> ClipEpisode:
+    def _require_key_for_level(self) -> ClipEpisodeV2:
         if self.level == "subject" and self.subject_key is None:
-            raise ValueError(
-                f"Episodio {self.id!r}: level='subject' exige `subject_key`. "
-                "Sin el, el matching caeria a nivel escena y matchearia la alerta "
-                "de otro sujeto de la misma fuente (F1 inflado)."
-            )
+            raise ValueError(f"Episodio {self.id!r}: level='subject' exige `subject_key`.")
         if self.level == "scene" and self.source_id is None:
             raise ValueError(f"Episodio {self.id!r}: level='scene' exige `source_id`.")
+        if self.end_ms < self.start_ms:
+            raise ValueError(f"Episodio {self.id!r}: end_ms < start_ms.")
         return self
 
 
 class ClipGroundTruthV2(BaseModel):
     schema_version: Literal["clip_gt.v2"]
     clip_id: str
-    episodes: list[ClipEpisode] = Field(default_factory=list)
+    source_file: str | None = None
+    block: str | None = None
+    scenario: str | None = None
+    fps_nominal: float | None = None
+    duration_ms: float | None = None
+    recording: dict[str, Any] | None = None
+    annotation: dict[str, Any] | None = None
+    negative: bool = False
+    episodes: list[ClipEpisodeV2] = Field(default_factory=list)
+    sub_threshold_events: list[SubThresholdEvent] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _internal_consistency(self) -> ClipGroundTruthV2:
+        if self.negative and self.episodes:
+            raise ValueError(f"Clip {self.clip_id!r}: negative=True pero trae episodios.")
+        if self.duration_ms is not None:
+            for ep in self.episodes:
+                if ep.end_ms > self.duration_ms:
+                    raise ValueError(
+                        f"Clip {self.clip_id!r}: episodio {ep.id!r} excede duration_ms."
+                    )
+        return self
+
+
+class MatchingWindow(BaseModel):
+    """Ventana de matching alerta<->episodio (spec 43 SS4.1). La alerta legitima
+    cae en [start_ms + persistencia_min, start_ms + t_alert_max]."""
+
+    persistencia_min_ms: float
+    t_alert_max_ms: float
+
+
+# Tabla D.4 vigente (spec 43 SS4.1 / SS10). Parametrizable: el fixture sintetico usa
+# timings comprimidos y el evaluador acepta un override por corrida/pattern set.
+DEFAULT_MATCHING_WINDOWS: dict[str, MatchingWindow] = {
+    "CR-01": MatchingWindow(persistencia_min_ms=3000.0, t_alert_max_ms=10000.0),
+    "CR-02": MatchingWindow(persistencia_min_ms=5000.0, t_alert_max_ms=20000.0),
+}
+
+
+def _episode_key_matches(alert: AlertEvent, episode: ClipEpisodeV2) -> bool:
+    if episode.level == "subject":
+        return alert.subject_key == episode.subject_key
+    return alert.source_id == episode.source_id
+
+
+def _alert_in_episode_window(
+    alert: AlertEvent, episode: ClipEpisodeV2, window: MatchingWindow
+) -> bool:
+    if alert.timestamp_ms is None:
+        return False
+    lo = episode.start_ms + window.persistencia_min_ms
+    hi = episode.start_ms + window.t_alert_max_ms
+    return lo <= alert.timestamp_ms <= hi
 
 
 class AlertMatch(BaseModel):
@@ -129,6 +188,12 @@ class TemporalAlertEvaluation(BaseModel):
     f1: float
     avg_latency_frames_from_first_evidence: float | None = None
     avg_latency_ms_from_first_evidence: float | None = None
+    # Campos v2 (episodio, ADR-011/ADR-006). Aditivos: schema_version no cambia.
+    re_alerts_count: int = 0
+    sub_threshold_count: int = 0
+    applicability_state: str | None = None
+    applicability_cause: str | None = None
+    avg_latency_ms_from_episode_start: float | None = None
     # Senal ruidosa ante un GT y unas alertas de granularidades incompatibles.
     warnings: list[str] = Field(default_factory=list)
     matches: list[AlertMatch] = Field(default_factory=list)
@@ -148,27 +213,13 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _load_ground_truth(path: Path) -> TemporalGroundTruth:
+def _load_ground_truth(path: Path) -> TemporalGroundTruth | ClipGroundTruthV2:
+    """Carga el ground truth SIN aplanar: v1 (`TemporalGroundTruth`, expected_alerts
+    por frame) y v2 (`ClipGroundTruthV2`, episodios en ms, spec 43 SS4) son schemas
+    distintos; el dispatch de `evaluate_temporal_alerts` decide segun el tipo."""
     raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if raw.get("schema_version") == "clip_gt.v2":
-        clip = ClipGroundTruthV2.model_validate(raw)
-        return TemporalGroundTruth(
-            scenario_id=clip.clip_id,
-            expected_alerts=[
-                ExpectedAlert(
-                    id=episode.id,
-                    condition_id=episode.condition_id,
-                    level=episode.level,
-                    subject_key=episode.subject_key,
-                    source_id=episode.source_id,
-                    first_evidence_frame_index=episode.first_evidence_frame_index,
-                    expected_alert_frame_index=episode.expected_alert_frame_index,
-                    max_alert_frame_index=episode.max_alert_frame_index,
-                    first_evidence_timestamp_ms=episode.first_evidence_timestamp_ms,
-                )
-                for episode in clip.episodes
-            ],
-        )
+        return ClipGroundTruthV2.model_validate(raw)
     return TemporalGroundTruth.model_validate(raw)
 
 
@@ -231,17 +282,48 @@ def evaluate_temporal_alerts(
     alerts_path: str | Path,
     ground_truth_path: str | Path,
     output_path: str | Path | None = None,
+    matching_windows: dict[str, MatchingWindow] | None = None,
 ) -> TemporalAlertEvaluation:
     """Compara alertas emitidas por replay contra expectativas temporales.
 
-    El ground truth es deliberadamente debil: no exige cajas por frame, solo alerta
-    esperada por condicion/sujeto y ventana temporal esperada.
+    Dispatcha por el tipo de ground truth ya cargado: `TemporalGroundTruth` (v1,
+    frame-based, `control.eval.temporal.v1`) va a `_evaluate_v1`; `ClipGroundTruthV2`
+    (v2, episodios en ms, spec 43 SS4) va a `_evaluate_v2` con matching por ventana
+    (ADR-011: re_alerts, sub_threshold, aplicabilidad ADR-006).
     """
 
     alerts_path = Path(alerts_path)
     ground_truth_path = Path(ground_truth_path)
     ground_truth = _load_ground_truth(ground_truth_path)
     alerts = _load_alerts(alerts_path)
+
+    if isinstance(ground_truth, ClipGroundTruthV2):
+        evaluation = _evaluate_v2(
+            alerts,
+            ground_truth,
+            alerts_path,
+            ground_truth_path,
+            matching_windows or DEFAULT_MATCHING_WINDOWS,
+        )
+    else:
+        evaluation = _evaluate_v1(alerts, ground_truth, alerts_path, ground_truth_path)
+
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(evaluation.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    return evaluation
+
+
+def _evaluate_v1(
+    alerts: list[AlertEvent],
+    ground_truth: TemporalGroundTruth,
+    alerts_path: Path,
+    ground_truth_path: Path,
+) -> TemporalAlertEvaluation:
+    """Evaluacion v1 (frame-based, `control.eval.temporal.v1`). Logica sin cambios
+    respecto de la version previa a Task 3: solo recibe los objetos ya cargados."""
 
     matched_alert_ids: set[str] = set()
     matched_keys: set[tuple[str, str]] = set()
@@ -360,11 +442,152 @@ def evaluate_temporal_alerts(
         matches=matches,
         missed_alerts=missed,
         unexpected_alerts=unexpected,
+        applicability_state="computed",
+        applicability_cause=None,
     )
 
-    if output_path is not None:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(evaluation.model_dump_json(indent=2) + "\n", encoding="utf-8")
-
     return evaluation
+
+
+def _evaluate_v2(
+    alerts: list[AlertEvent],
+    ground_truth: ClipGroundTruthV2,
+    alerts_path: Path,
+    ground_truth_path: Path,
+    matching_windows: dict[str, MatchingWindow],
+) -> TemporalAlertEvaluation:
+    """Evaluacion v2 a nivel episodio (spec 43 SS4, ADR-011, ADR-006).
+
+    Aplicabilidad primero: una fuente sin timestamps (todas las alertas con
+    `timestamp_ms is None`) no es evaluable temporalmente y se declara
+    `not_applicable` en vez de contarse silenciosamente como missed/FP.
+
+    Por episodio: candidatos = alertas con `condition_id` igual, misma clave
+    (escena o sujeto) y dentro de la ventana de matching. El primer candidato
+    por `timestamp_ms` es el match; el resto de candidatos del MISMO episodio
+    son `re_alerts` (ADR-011: no son FP). Las alertas no consumidas por ningun
+    episodio caen a `sub_threshold` (si estan dentro de un `sub_threshold_event`
+    de su condicion) o a `unexpected` (FP verdadero) en caso contrario.
+    """
+
+    warnings: list[str] = []
+
+    if alerts and all(alert.timestamp_ms is None for alert in alerts):
+        return TemporalAlertEvaluation(
+            scenario_id=ground_truth.clip_id,
+            alerts_path=str(alerts_path),
+            ground_truth_path=str(ground_truth_path),
+            expected_alerts_count=len(ground_truth.episodes),
+            observed_alerts_count=len(alerts),
+            matched_alerts_count=0,
+            missed_alerts_count=0,
+            unexpected_alerts_count=0,
+            duplicate_alerts_count=0,
+            re_alerts_count=0,
+            sub_threshold_count=0,
+            precision=0.0,
+            recall=0.0,
+            f1=0.0,
+            applicability_state="not_applicable",
+            applicability_cause="non_temporal_source",
+            warnings=warnings,
+        )
+
+    consumed_alert_ids: set[str] = set()
+    matched_count = 0
+    re_alerts_count = 0
+    missed_count = 0
+    latencies: list[float] = []
+
+    for episode in ground_truth.episodes:
+        window = matching_windows.get(episode.condition_id) or DEFAULT_MATCHING_WINDOWS.get(
+            episode.condition_id
+        )
+        if window is None:
+            warnings.append(
+                f"sin matching_window para condition_id={episode.condition_id!r} "
+                f"(episodio {episode.id!r}): no se puede evaluar, se cuenta como missed."
+            )
+            missed_count += 1
+            continue
+
+        candidates = sorted(
+            (
+                alert
+                for alert in alerts
+                # Una alerta ya consumida (match o re_alert) por un episodio previo
+                # no puede volver a matchear otro episodio: dos episodios del mismo
+                # condition_id + clave con ventanas solapadas (t_alert_max_ms llega
+                # a 10-20s) comparten alertas candidatas, y sin esta exclusion una
+                # sola alerta infla matched_alerts_count/recall en ambos episodios.
+                if alert.alert_id not in consumed_alert_ids
+                and alert.condition_id == episode.condition_id
+                and _episode_key_matches(alert, episode)
+                and _alert_in_episode_window(alert, episode, window)
+            ),
+            key=lambda alert: alert.timestamp_ms,
+        )
+        if not candidates:
+            missed_count += 1
+            continue
+
+        first = candidates[0]
+        consumed_alert_ids.add(first.alert_id)
+        matched_count += 1
+        latencies.append(first.timestamp_ms - episode.start_ms)
+        for extra in candidates[1:]:
+            consumed_alert_ids.add(extra.alert_id)
+            re_alerts_count += 1
+
+    unexpected: list[UnexpectedAlert] = []
+    sub_threshold_count = 0
+    for alert in alerts:
+        if alert.alert_id in consumed_alert_ids:
+            continue
+        in_sub_threshold = alert.timestamp_ms is not None and any(
+            event.condition_id == alert.condition_id and event.start_ms <= alert.timestamp_ms <= event.end_ms
+            for event in ground_truth.sub_threshold_events
+        )
+        if in_sub_threshold:
+            sub_threshold_count += 1
+            continue
+        unexpected.append(
+            UnexpectedAlert(
+                alert_id=alert.alert_id,
+                condition_id=alert.condition_id,
+                subject_key=alert.subject_key,
+                frame_index=alert.frame_index,
+                reason="outside_all_episode_windows",
+            )
+        )
+
+    unexpected_count = len(unexpected)
+    # ADR-011: re_alerts y sub_threshold NO son FP, no entran al denominador de precision.
+    precision = _safe_div(matched_count, matched_count + unexpected_count)
+    recall = _safe_div(matched_count, len(ground_truth.episodes))
+    f1 = round((2 * precision * recall) / (precision + recall), 6) if precision + recall else 0.0
+
+    for message in warnings:
+        logger.warning(message)
+
+    return TemporalAlertEvaluation(
+        scenario_id=ground_truth.clip_id,
+        alerts_path=str(alerts_path),
+        ground_truth_path=str(ground_truth_path),
+        expected_alerts_count=len(ground_truth.episodes),
+        observed_alerts_count=len(alerts),
+        matched_alerts_count=matched_count,
+        missed_alerts_count=missed_count,
+        unexpected_alerts_count=unexpected_count,
+        duplicate_alerts_count=0,
+        re_alerts_count=re_alerts_count,
+        sub_threshold_count=sub_threshold_count,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+        avg_latency_ms_from_episode_start=round(mean(latencies), 6) if latencies else None,
+        applicability_state="computed",
+        applicability_cause=None,
+        warnings=warnings,
+        unexpected_alerts=unexpected,
+    )

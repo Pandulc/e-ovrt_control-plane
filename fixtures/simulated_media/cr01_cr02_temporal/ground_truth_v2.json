@@ -2,30 +2,14 @@
   "schema_version": "clip_gt.v2",
   "clip_id": "cr01_cr02_temporal",
   "source_file": "detections.jsonl",
+  "duration_ms": 6000.0,
   "negative": false,
-  "description": "Episodios a nivel escena-condicion (G0). Bajo granularidad `scene` la escena queda en evidencia si >=1 sujeto aporta la condicion. worker_b (riesgo transitorio) no genera alerta propia, pero su ausencia de EPP se solapa con la del sujeto persistente y adelanta el reloj de la escena: CR-01 confirma en frame 4 (no 5) y CR-02 en frame 5 (no 7). Frames verificados contra el replay real.",
+  "description": "Episodios escena-condicion (G0), tiempos en ms. Sinteticos: ventanas comprimidas respecto de Tabla D.4 (ver test).",
   "episodes": [
-    {
-      "id": "ep_cr01",
-      "condition_id": "CR-01",
-      "level": "scene",
-      "source_id": "sim-risk-stream",
-      "first_evidence_frame_index": 2,
-      "expected_alert_frame_index": 4,
-      "max_alert_frame_index": 4,
-      "first_evidence_timestamp_ms": 1000.0,
-      "subjects_in_evidence": 1
-    },
-    {
-      "id": "ep_cr02",
-      "condition_id": "CR-02",
-      "level": "scene",
-      "source_id": "sim-risk-stream",
-      "first_evidence_frame_index": 2,
-      "expected_alert_frame_index": 5,
-      "max_alert_frame_index": 5,
-      "first_evidence_timestamp_ms": 1000.0,
-      "subjects_in_evidence": 1
-    }
-  ]
+    {"id": "ep_cr01", "condition_id": "CR-01", "level": "scene", "source_id": "sim-risk-stream",
+     "start_ms": 1000.0, "end_ms": 5500.0, "subjects_in_evidence": 1},
+    {"id": "ep_cr02", "condition_id": "CR-02", "level": "scene", "source_id": "sim-risk-stream",
+     "start_ms": 1000.0, "end_ms": 5500.0, "subjects_in_evidence": 1}
+  ],
+  "sub_threshold_events": []
 }
