@@ -67,9 +67,28 @@ def evaluate_alerts(
         "-o",
         help="Archivo JSON donde guardar la evaluacion temporal.",
     ),
+    detections: Path | None = typer.Option(
+        None,
+        "--detections",
+        help="detections.jsonl (media.detection.v1) para computar SDR + TTFD "
+        "(spec 43 SS10). Opcional: sin esto, SDR/TTFD quedan not_applicable.",
+    ),
+    patterns: Path | None = typer.Option(
+        None,
+        "--patterns",
+        help="Pattern set (YAML) para el criterio de deteccion positiva de "
+        "SDR/TTFD. Opcional: si se pasa --detections sin --patterns se usa el "
+        "default configs/patterns/cr01_cr02_v2.yaml si existe.",
+    ),
 ) -> None:
     """Evalua alertas contra ground truth temporal debil."""
-    evaluation = evaluate_temporal_alerts(alerts, ground_truth, output)
+    evaluation = evaluate_temporal_alerts(
+        alerts,
+        ground_truth,
+        output,
+        detections_path=detections,
+        patterns_path=patterns,
+    )
     console.print(f"Escenario: {evaluation.scenario_id}")
     console.print(f"Esperadas: {evaluation.expected_alerts_count}")
     console.print(f"Observadas: {evaluation.observed_alerts_count}")
@@ -79,6 +98,11 @@ def evaluate_alerts(
     console.print(f"Precision: {evaluation.precision:.3f}")
     console.print(f"Recall: {evaluation.recall:.3f}")
     console.print(f"F1: {evaluation.f1:.3f}")
+    console.print(f"TTFD/SDR: {evaluation.ttfd_sdr_applicability}")
+    if evaluation.avg_ttfd_ms is not None:
+        console.print(f"Avg TTFD (ms): {evaluation.avg_ttfd_ms:.1f}")
+    if evaluation.avg_sdr is not None:
+        console.print(f"Avg SDR: {evaluation.avg_sdr:.3f}")
     if output is not None:
         console.print(f"Evaluacion: {output}")
 

@@ -409,9 +409,9 @@ def test_clip_gt_v2_scene_episode_requires_source_id():
 def test_matching_window_default_bands():
     from eovrt_control.evaluation.temporal import DEFAULT_MATCHING_WINDOWS
 
-    assert DEFAULT_MATCHING_WINDOWS["CR-01"].persistencia_min_ms == 3000.0
+    assert DEFAULT_MATCHING_WINDOWS["CR-01"].persistencia_min_ms == 4000.0
     assert DEFAULT_MATCHING_WINDOWS["CR-01"].t_alert_max_ms == 10000.0
-    assert DEFAULT_MATCHING_WINDOWS["CR-02"].persistencia_min_ms == 5000.0
+    assert DEFAULT_MATCHING_WINDOWS["CR-02"].persistencia_min_ms == 7000.0
     assert DEFAULT_MATCHING_WINDOWS["CR-02"].t_alert_max_ms == 20000.0
 
 
@@ -655,8 +655,8 @@ def test_v2_overlapping_episode_windows_do_not_share_a_matched_alert(tmp_path) -
 def test_v2_default_matching_windows_full_scenario(tmp_path) -> None:
     """Ejercita las bandas DEFAULT de Tabla D.4 (`matching_windows=None`) con un
     escenario completo: match + re_alert + FP fuera de ventana + sub_threshold_event.
-    CR-01 default: persistencia_min_ms=3000, t_alert_max_ms=10000 -> ventana del
-    episodio (start_ms=1000) es [4000, 11000]."""
+    CR-01 default: persistencia_min_ms=4000, t_alert_max_ms=10000 -> ventana del
+    episodio (start_ms=1000) es [5000, 11000]."""
     gt = {
         "schema_version": "clip_gt.v2",
         "clip_id": "c_bands",
@@ -712,3 +712,201 @@ def test_v2_default_matching_windows_full_scenario(tmp_path) -> None:
     assert ev.unexpected_alerts_count == 1
     assert ev.sub_threshold_count == 1
     assert ev.applicability_state == "computed"
+
+
+# --- Hallazgo de auditoria: doble fuente de verdad de umbrales de persistencia
+# (provenance.pattern_set_ms del GT vs DEFAULT_MATCHING_WINDOWS hardcodeado). ---
+
+
+def _gt_with_provenance(condition_id: str, pattern_set_ms: dict, start_ms: float = 1000.0) -> dict:
+    return {
+        "schema_version": "clip_gt.v2",
+        "clip_id": "c_provenance",
+        "duration_ms": 30000.0,
+        "episodes": [
+            {
+                "id": "e1",
+                "condition_id": condition_id,
+                "level": "scene",
+                "source_id": "s1",
+                "start_ms": start_ms,
+                "end_ms": 20000.0,
+            }
+        ],
+        "provenance": {
+            "xml_sha256": "0" * 64,
+            "pattern_set_ms": pattern_set_ms,
+            "tool": "video-gt-lab/derive_clip_gt",
+        },
+    }
+
+
+def test_v2_no_caller_windows_uses_provenance_persistence(tmp_path) -> None:
+    """(a) El GT trae provenance.pattern_set_ms con CR-01=8000 (distinto del
+    default 3000). Sin matching_windows del caller, la ventana efectiva debe
+    usar la persistencia del provenance y el t_alert_max del default de esa
+    condicion: [1000+8000, 1000+10000] = [9000, 11000]. Una alerta a 5000ms
+    hubiera matcheado bajo el default (ventana [4000, 11000]) pero NO bajo
+    provenance: si el evaluador ignora provenance esta alerta se cuenta como
+    match y el test detecta la doble fuente de verdad."""
+    gt = _gt_with_provenance("CR-01", {"CR-01": 8000})
+    (tmp_path / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
+    (tmp_path / "alerts.jsonl").write_text(
+        _mk_alert(
+            alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+            source_id="s1", timestamp_ms=5000.0,
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    ev = evaluate_temporal_alerts(
+        tmp_path / "alerts.jsonl", tmp_path / "gt.json", matching_windows=None
+    )
+
+    assert ev.matched_alerts_count == 0
+    assert ev.missed_alerts_count == 1
+    assert ev.unexpected_alerts_count == 1  # la alerta a 5000ms queda fuera de [9000, 11000]
+    assert ev.effective_matching_windows["CR-01"].persistencia_min_ms == 8000.0
+    assert ev.effective_matching_windows["CR-01"].t_alert_max_ms == 10000.0
+    assert ev.effective_matching_windows["CR-01"].origin == "gt_provenance"
+
+
+def test_v2_provenance_persistence_matches_when_alert_in_shifted_window(tmp_path) -> None:
+    """Complemento del anterior: una alerta DENTRO de la ventana desplazada por
+    provenance (9500ms, en [9000, 11000]) si matchea."""
+    gt = _gt_with_provenance("CR-01", {"CR-01": 8000})
+    (tmp_path / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
+    (tmp_path / "alerts.jsonl").write_text(
+        _mk_alert(
+            alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+            source_id="s1", timestamp_ms=9500.0,
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    ev = evaluate_temporal_alerts(
+        tmp_path / "alerts.jsonl", tmp_path / "gt.json", matching_windows=None
+    )
+
+    assert ev.matched_alerts_count == 1
+    assert ev.missed_alerts_count == 0
+    assert ev.unexpected_alerts_count == 0
+
+
+def test_v2_explicit_caller_windows_win_over_provenance(tmp_path) -> None:
+    """(b) Un matching_windows explicito del caller tiene prioridad absoluta
+    sobre provenance, aunque el GT traiga un pattern_set_ms distinto."""
+    from eovrt_control.evaluation.temporal import MatchingWindow
+
+    gt = _gt_with_provenance("CR-01", {"CR-01": 8000})
+    (tmp_path / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
+    (tmp_path / "alerts.jsonl").write_text(
+        _mk_alert(
+            alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+            source_id="s1", timestamp_ms=5000.0,
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+    caller_windows = {"CR-01": MatchingWindow(persistencia_min_ms=3000.0, t_alert_max_ms=10000.0)}
+
+    ev = evaluate_temporal_alerts(
+        tmp_path / "alerts.jsonl", tmp_path / "gt.json", matching_windows=caller_windows
+    )
+
+    # Bajo la ventana del caller [4000, 11000] la alerta a 5000ms si matchea,
+    # pese a que provenance pediria [9000, 11000].
+    assert ev.matched_alerts_count == 1
+    assert ev.effective_matching_windows["CR-01"].persistencia_min_ms == 3000.0
+    assert ev.effective_matching_windows["CR-01"].origin == "caller"
+
+
+def test_v2_gt_without_provenance_uses_defaults_unchanged(tmp_path) -> None:
+    """(c) GT sin provenance -> ventanas efectivas = DEFAULT_MATCHING_WINDOWS,
+    comportamiento identico al previo a este fix, con origin='defaults'."""
+    gt = {
+        "schema_version": "clip_gt.v2",
+        "clip_id": "c_no_provenance",
+        "duration_ms": 20000.0,
+        "episodes": [
+            {
+                "id": "e1",
+                "condition_id": "CR-01",
+                "level": "scene",
+                "source_id": "s1",
+                "start_ms": 1000.0,
+                "end_ms": 12000.0,
+            }
+        ],
+    }
+    (tmp_path / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
+    (tmp_path / "alerts.jsonl").write_text(
+        _mk_alert(
+            alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+            source_id="s1", timestamp_ms=5000.0,
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    ev = evaluate_temporal_alerts(
+        tmp_path / "alerts.jsonl", tmp_path / "gt.json", matching_windows=None
+    )
+
+    assert ev.matched_alerts_count == 1
+    assert ev.effective_matching_windows["CR-01"].persistencia_min_ms == 4000.0
+    assert ev.effective_matching_windows["CR-01"].t_alert_max_ms == 10000.0
+    assert ev.effective_matching_windows["CR-01"].origin == "defaults"
+
+
+def test_v2_provenance_condition_without_default_is_not_silently_guessed(tmp_path) -> None:
+    """Provenance trae una condition_id que no existe en DEFAULT_MATCHING_WINDOWS
+    (sin t_alert_max conocido). En vez de inventar un techo de latencia, el
+    evaluador no arma ventana para esa condicion: cae al camino existente
+    ('sin matching_window', se cuenta como missed con warning) en vez de fallar
+    en silencio con un numero adivinado."""
+    gt = _gt_with_provenance("CR-99", {"CR-99": 4000})
+    (tmp_path / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
+    (tmp_path / "alerts.jsonl").write_text("", encoding="utf-8")
+
+    ev = evaluate_temporal_alerts(
+        tmp_path / "alerts.jsonl", tmp_path / "gt.json", matching_windows=None
+    )
+
+    assert ev.missed_alerts_count == 1
+    assert any("CR-99" in message for message in ev.warnings)
+    assert "CR-99" not in ev.effective_matching_windows
+
+
+def test_clip_ground_truth_v2_reads_provenance_pattern_set_ms() -> None:
+    """El schema pydantic del GT ya no ignora `provenance` (extra=ignore): debe
+    poder leerse tipado para que el evaluador lo use."""
+    from eovrt_control.evaluation.temporal import ClipGroundTruthV2
+
+    gt = ClipGroundTruthV2.model_validate(
+        {
+            "schema_version": "clip_gt.v2",
+            "clip_id": "c1",
+            "episodes": [],
+            "provenance": {
+                "xml_sha256": "a" * 64,
+                "pattern_set_ms": {"CR-01": 3000, "CR-02": 5000},
+                "tool": "video-gt-lab/derive_clip_gt",
+            },
+        }
+    )
+    assert gt.provenance is not None
+    assert gt.provenance.pattern_set_ms == {"CR-01": 3000, "CR-02": 5000}
+    assert gt.provenance.tool == "video-gt-lab/derive_clip_gt"
+
+
+def test_clip_ground_truth_v2_without_provenance_defaults_to_none() -> None:
+    """GT historico sin bloque provenance sigue validando (campo opcional)."""
+    from eovrt_control.evaluation.temporal import ClipGroundTruthV2
+
+    gt = ClipGroundTruthV2.model_validate(
+        {"schema_version": "clip_gt.v2", "clip_id": "c1", "episodes": []}
+    )
+    assert gt.provenance is None
