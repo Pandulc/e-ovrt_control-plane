@@ -31,6 +31,11 @@ def create_run(body: ControlRunRequest, request: Request):
     return {"control_run_id": control_run_id}
 
 
+@router.get("/runs")
+def list_runs(request: Request, media_run_id: str | None = Query(default=None)):
+    return _manager(request).list_runs(media_run_id=media_run_id)
+
+
 # ANTES de /runs/{run_id}: si no, `current` se matchea como un run_id.
 @router.get("/runs/current")
 def get_current_run(request: Request):
@@ -55,5 +60,29 @@ def get_run_alerts(run_id: str, request: Request, limit: int | None = Query(defa
     require_valid_run_id(run_id)
     try:
         return _manager(request).alerts(run_id, limit=limit)
+    except UnknownRunError as exc:
+        raise HTTPException(status_code=404, detail=f"Run desconocido: {run_id}") from exc
+
+
+@router.get("/runs/{run_id}/pattern-progress")
+def get_run_pattern_progress(
+    run_id: str, request: Request, limit: int | None = Query(default=None, ge=0)
+):
+    """Fuente de la vista de progreso de patrones de la webconsole. Espejo de /alerts."""
+    require_valid_run_id(run_id)
+    try:
+        return _manager(request).pattern_progress(run_id, limit=limit)
+    except UnknownRunError as exc:
+        raise HTTPException(status_code=404, detail=f"Run desconocido: {run_id}") from exc
+
+
+@router.get("/runs/{run_id}/received-units")
+def get_run_received_units(
+    run_id: str, request: Request, limit: int | None = Query(default=None, ge=0)
+):
+    """Unidades recibidas por esta corrida, para la vista correlacionada media<->control."""
+    require_valid_run_id(run_id)
+    try:
+        return _manager(request).received_units(run_id, limit=limit)
     except UnknownRunError as exc:
         raise HTTPException(status_code=404, detail=f"Run desconocido: {run_id}") from exc

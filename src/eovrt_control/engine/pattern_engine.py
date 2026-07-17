@@ -9,7 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 from eovrt_control.config import PatternDefinition
 from eovrt_control.contracts.alerts import AlertEvent
 from eovrt_control.contracts.media import DetectionEvent
-from eovrt_control.contracts.pattern import PatternEvidence, PatternStateChanged
+from eovrt_control.contracts.pattern import PatternEvidence, PatternProgress, PatternStateChanged
 from eovrt_control.engine.evaluators.spatial_absence import evaluate_spatial_absence
 
 
@@ -56,6 +56,7 @@ class PatternEngineResult:
     evidences_count: int
     subjects_count: int
     degradation_causes: set[str] = field(default_factory=set)
+    progress: list["PatternProgress"] = field(default_factory=list)
 
 
 class PatternEngine:
@@ -88,6 +89,7 @@ class PatternEngine:
         evidences_count = 0
         subjects_count = 0
         degradation_causes: set[str] = set()
+        progress_records: list[PatternProgress] = []
 
         for pattern in self.patterns:
             result = evaluate_spatial_absence(event, pattern)
@@ -130,6 +132,10 @@ class PatternEngine:
                         pattern_events.append(change)
                     continue
                 change = self._advance_hit(event, pattern, subject_key, evidence)
+                runtime_state = self._state[(pattern.id, subject_key)]
+                prog = self._progress_record(event, pattern, subject_key, runtime_state)
+                if prog is not None:
+                    progress_records.append(prog)
                 if change is None:
                     continue
                 pattern_events.append(change)
@@ -148,6 +154,7 @@ class PatternEngine:
             evidences_count=evidences_count,
             subjects_count=subjects_count,
             degradation_causes=degradation_causes,
+            progress=progress_records,
         )
 
     def _advance_hit(
@@ -211,6 +218,54 @@ class PatternEngine:
             first_evidence_ms=runtime_state.first_evidence_monotonic_ms,
             first_evidence_unit_id=runtime_state.first_evidence_unit_id,
             first_evidence_frame_index=runtime_state.first_evidence_frame_index,
+        )
+
+    def _progress_record(
+        self,
+        event: DetectionEvent,
+        pattern: PatternDefinition,
+        subject_key: str,
+        runtime_state: PatternRuntimeState,
+    ) -> PatternProgress | None:
+        """Progreso parcial del episodio en curso. Solo en candidate (spec D3).
+
+        Espeja la seleccion de modo de _confirmation_met: time si hay umbral
+        temporal + timestamps; si no, frames. Derivado puro: no muta estado.
+        """
+        if runtime_state.state != "candidate":
+            return None
+        timing = pattern.timing
+        if (
+            timing.confirm_after_ms is not None
+            and event.source.timestamp_ms is not None
+            and runtime_state.first_hit_timestamp_ms is not None
+        ):
+            elapsed_ms = event.source.timestamp_ms - runtime_state.first_hit_timestamp_ms
+            mode, threshold_ms = "time", timing.confirm_after_ms
+            ratio = elapsed_ms / threshold_ms if threshold_ms > 0 else 0.0
+        elif timing.confirm_after_frames:
+            elapsed_ms, threshold_ms = None, None
+            mode = "frames"
+            ratio = runtime_state.hit_count / timing.confirm_after_frames
+        else:
+            return None
+        return PatternProgress(
+            control_run_id=self.control_run_id,
+            media_run_id=event.run_id,
+            unit_id=event.unit_id,
+            source_id=event.source.source_id,
+            pattern_id=pattern.id,
+            condition_id=pattern.condition_id,
+            subject_key=subject_key,
+            frame_index=event.source.frame_index,
+            timestamp_ms=event.source.timestamp_ms,
+            mode=mode,
+            elapsed_ms=elapsed_ms,
+            threshold_ms=threshold_ms,
+            elapsed_frames=runtime_state.hit_count,
+            threshold_frames=timing.confirm_after_frames,
+            progress=max(0.0, min(ratio, 1.0)),
+            experiment_id=self.experiment_id,
         )
 
     def _advance_clear(

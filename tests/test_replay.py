@@ -269,6 +269,21 @@ def test_replay_summary_declares_jsonl_source_and_media_run_id(tmp_path) -> None
     assert summary.media_run_id == summary.media_run_ids[0]
 
 
+def test_replay_writes_pattern_progress_jsonl(tmp_path) -> None:
+    """Task 3 (pattern-progress): el runtime persiste el progreso que el motor
+    ya emite (Tasks 1-2) en runs/<id>/pattern_progress.jsonl."""
+    config_path = _write_config(tmp_path)  # fixture temporal (video_frame), estado 'computed'
+    run_replay(config_path)
+
+    run_dir = tmp_path / "runs" / "control-run"
+    progress_path = run_dir / "pattern_progress.jsonl"
+    assert progress_path.exists()
+    rows = [json.loads(line) for line in progress_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows, "al menos un frame en candidate debe emitir progreso"
+    assert all(r["schema_version"] == "control.pattern_progress.v1" for r in rows)
+    assert all(0.0 <= r["progress"] <= 1.0 for r in rows)
+
+
 def test_replay_summary_carries_experiment_id(tmp_path) -> None:
     """Spec 41 SS8.1: experiment_id viaja de la config al summary."""
     config_path = _write_config(tmp_path)

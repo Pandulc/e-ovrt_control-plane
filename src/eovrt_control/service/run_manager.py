@@ -200,6 +200,84 @@ class RunManager:
             rows = rows[: max(limit, 0)]
         return rows
 
+    def pattern_progress(self, run_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.is_dir():
+            raise UnknownRunError(run_id)
+        path = run_dir / "pattern_progress.jsonl"
+        if not path.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as fh:
+            for line_no, line in enumerate(fh, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    # Linea corrupta (kill a mitad de escritura): se saltea, no
+                    # se rompe el endpoint entero por una sola linea ilegible.
+                    logger.warning(
+                        "progreso ilegible en %s linea %d: %s", run_id, line_no, exc
+                    )
+        if limit is not None:
+            rows = rows[: max(limit, 0)]
+        return rows
+
+    def list_runs(self, media_run_id: str | None = None) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        runs_dir = self._settings.runs_dir
+        if not runs_dir.is_dir():
+            return rows
+        for run_dir in runs_dir.iterdir():
+            summary_path = run_dir / "summary.json"
+            if not summary_path.is_file():
+                continue
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("summary ilegible en %s: %s", run_dir.name, exc)
+                continue
+            if media_run_id is not None and summary.get("media_run_id") != media_run_id:
+                continue
+            rows.append(
+                {
+                    "control_run_id": run_dir.name,
+                    "status": summary.get("status"),
+                    "started_at": summary.get("started_at"),
+                    "alerts_count": summary.get("alerts_count"),
+                    "media_run_id": summary.get("media_run_id"),
+                }
+            )
+        rows.sort(key=lambda r: r.get("started_at") or "", reverse=True)
+        return rows
+
+    def received_units(self, run_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.is_dir():
+            raise UnknownRunError(run_id)
+        path = run_dir / "metrics.jsonl"
+        if not path.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as fh:
+            for line_no, line in enumerate(fh, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    sample = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "metrica ilegible en %s linea %d: %s", run_id, line_no, exc
+                    )
+                    continue
+                unit_id = sample.get("unit_id")
+                if unit_id is not None:
+                    rows.append({"unit_id": unit_id})
+        if limit is not None:
+            rows = rows[: max(limit, 0)]
+        return rows
+
     def effective_config(self) -> dict[str, Any]:
         with self._lock:
             active = self._active

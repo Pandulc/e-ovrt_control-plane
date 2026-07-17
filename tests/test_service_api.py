@@ -298,3 +298,120 @@ def test_config_endpoint_returns_404_before_any_run_and_the_config_after(client,
     config = client.get("/api/config")
     assert config.status_code == 200
     assert config.json()["run"]["id"] == "api-run"
+
+
+def test_pattern_progress_endpoint_serves_rows(client, tmp_path) -> None:
+    client.post("/api/runs", json={"mode": "replay", "config": _payload(tmp_path)})
+    client.app.state.manager.join_active(timeout=30.0)
+
+    run_dir = tmp_path / "runs" / "api-run"
+    progress_path = run_dir / "pattern_progress.jsonl"
+    progress_path.write_text(
+        "\n".join(json.dumps({"progress": p}) for p in (0.25, 0.5)) + "\n", encoding="utf-8"
+    )
+
+    response = client.get("/api/runs/api-run/pattern-progress")
+    assert response.status_code == 200
+    rows = response.json()
+    assert [r["progress"] for r in rows] == [0.25, 0.5]
+
+    limited = client.get("/api/runs/api-run/pattern-progress?limit=1")
+    assert [r["progress"] for r in limited.json()] == [0.25]
+
+
+def test_pattern_progress_endpoint_unknown_run_404(client) -> None:
+    assert client.get("/api/runs/no-existe/pattern-progress").status_code == 404
+
+
+def test_pattern_progress_endpoint_missing_file_returns_empty(client, tmp_path) -> None:
+    client.post("/api/runs", json={"mode": "replay", "config": _payload(tmp_path)})
+    client.app.state.manager.join_active(timeout=30.0)
+
+    run_dir = tmp_path / "runs" / "api-run"
+    (run_dir / "pattern_progress.jsonl").unlink(missing_ok=True)
+
+    response = client.get("/api/runs/api-run/pattern-progress")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_pattern_progress_endpoint_empty_file_from_real_run(client, tmp_path) -> None:
+    """Caso realista: `JsonlSink` crea `pattern_progress.jsonl` en modo "w"
+    incondicionalmente, asi que un run real deja el archivo PRESENTE pero VACIO
+    cuando ninguna condicion estuvo en curso (a diferencia del test de arriba,
+    que borra el archivo artificialmente para simular su ausencia). Este test no
+    toca el archivo despues del run: es el comportamiento real end-to-end."""
+    client.post("/api/runs", json={"mode": "replay", "config": _payload(tmp_path)})
+    client.app.state.manager.join_active(timeout=30.0)
+
+    run_dir = tmp_path / "runs" / "api-run"
+    progress_path = run_dir / "pattern_progress.jsonl"
+    assert progress_path.exists()
+    assert progress_path.read_text(encoding="utf-8") == ""
+
+    response = client.get("/api/runs/api-run/pattern-progress")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def _write_summary(tmp_path: Path, run_id: str, **fields) -> None:
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(json.dumps(fields), encoding="utf-8")
+
+
+def test_list_runs_lookup_by_media_run_id(client, tmp_path) -> None:
+    _write_summary(
+        tmp_path, "ctrl-a",
+        media_run_id="media-1", status="succeeded",
+        started_at="2026-07-17T00:00:00Z", alerts_count=1,
+    )
+    _write_summary(
+        tmp_path, "ctrl-b",
+        media_run_id="media-2", status="succeeded",
+        started_at="2026-07-16T00:00:00Z", alerts_count=2,
+    )
+
+    r = client.get("/api/runs?media_run_id=media-1")
+    assert r.status_code == 200
+    rows = r.json()
+    assert [x["control_run_id"] for x in rows] == ["ctrl-a"]
+    assert rows[0]["media_run_id"] == "media-1" and rows[0]["alerts_count"] == 1
+
+    todo = client.get("/api/runs")
+    assert {x["control_run_id"] for x in todo.json()} >= {"ctrl-a", "ctrl-b"}
+
+
+def test_list_runs_skips_corrupt_summary(client, tmp_path) -> None:
+    run_dir = tmp_path / "runs" / "ctrl-corrupt"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text("{not valid json", encoding="utf-8")
+
+    assert client.get("/api/runs").status_code == 200
+
+
+def test_received_units_serves_unit_ids(client, tmp_path) -> None:
+    run_id = "run-with-units"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = run_dir / "metrics.jsonl"
+    metrics_path.write_text(
+        "\n".join(json.dumps({"unit_id": u}) for u in ("u0", "u1", "u2")) + "\n",
+        encoding="utf-8",
+    )
+
+    r = client.get(f"/api/runs/{run_id}/received-units")
+    assert r.status_code == 200
+    assert [x["unit_id"] for x in r.json()] == ["u0", "u1", "u2"]
+
+    limited = client.get(f"/api/runs/{run_id}/received-units?limit=2")
+    assert len(limited.json()) == 2
+
+
+def test_received_units_unknown_run_404_and_missing_file_empty(client, tmp_path) -> None:
+    assert client.get("/api/runs/no-existe/received-units").status_code == 404
+
+    run_id = "run-without-metrics"
+    (tmp_path / "runs" / run_id).mkdir(parents=True, exist_ok=True)
+
+    assert client.get(f"/api/runs/{run_id}/received-units").json() == []

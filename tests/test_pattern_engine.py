@@ -584,3 +584,60 @@ def test_max_subjects_resets_on_new_episode() -> None:
     result = engine.process(_event(2, [_person([0, 0, 100, 200])]))
 
     assert result.alerts[0].subjects_in_evidence_max == 1
+
+
+def test_pattern_progress_contract_defaults() -> None:
+    from eovrt_control.contracts.pattern import PatternProgress
+
+    rec = PatternProgress(
+        control_run_id="c", media_run_id="m", unit_id="unit-0",
+        pattern_id="CR-01", condition_id="CR-01", subject_key="s",
+        mode="time", elapsed_ms=500.0, threshold_ms=1000.0,
+        elapsed_frames=2, progress=0.5,
+    )
+    assert rec.schema_version == "control.pattern_progress.v1"
+    assert rec.event_type == "pattern_progress"
+    assert rec.threshold_frames is None and rec.source_id is None
+
+
+def test_progress_ratio_and_clamp_in_time_mode() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+    r0 = engine.process(_event_at(0.0, 0))       # entra a candidate, elapsed=0
+    r1 = engine.process(_event_at(500.0, 1))     # mitad del umbral (1000ms)
+    r2 = engine.process(_event_at(1000.0, 2))    # cruza umbral -> confirmed
+
+    assert [p.progress for p in r0.progress] == [0.0]
+    assert [p.progress for p in r1.progress] == [0.5]
+    p = r1.progress[0]
+    assert (p.mode, p.elapsed_ms, p.threshold_ms) == ("time", 500.0, 1000.0)
+    assert p.elapsed_frames == 2 and p.threshold_frames == 99
+    # D3: al confirmarse deja de emitir progreso
+    assert r2.progress == [] and [e.state for e in r2.pattern_events] == ["confirmed"]
+
+
+def test_progress_resets_on_new_episode() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+    engine.process(_event_at(0.0, 0))
+    engine.process(_event_at(400.0, 1))                      # 0.4
+    engine.process(_event_at(600.0, 2, has_helmet=True))     # cubierto
+    engine.process(_event_at(1200.0, 3, has_helmet=True))    # resolve (500ms clear)
+    r = engine.process(_event_at(2000.0, 4))                 # episodio nuevo
+    assert [p.progress for p in r.progress] == [0.0]
+
+
+def test_progress_frames_mode_without_clock() -> None:
+    pattern = _time_pattern()
+    pattern.timing.confirm_after_ms = None   # sin umbral temporal -> rige frames (99)
+    engine = PatternEngine(control_run_id="control-run", patterns=[pattern])
+    engine.process(_event_at(0.0, 0))
+    r = engine.process(_event_at(0.0, 1))
+    p = r.progress[0]
+    assert p.mode == "frames" and p.elapsed_ms is None and p.threshold_ms is None
+    assert p.progress == 2 / 99 and p.elapsed_frames == 2
+
+
+def test_progress_does_not_alter_state_machine_or_alerts() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+    engine.process(_event_at(0.0, 0))
+    r = engine.process(_event_at(1000.0, 1))
+    assert len(r.alerts) == 1  # el comportamiento previo de confirmacion no cambia

@@ -57,3 +57,30 @@ class PatternStateChanged(BaseModel):
     # motor y de ahi a cada evento (no solo al RunSummary). Aditivo.
     experiment_id: str | None = None
 
+
+class PatternProgress(BaseModel):
+    """Progreso parcial de un patron en estado candidate (spec pattern-progress).
+
+    Un registro por (frame, patron, sujeto) mientras la condicion esta en curso.
+    Convencion de ids identica a PatternStateChanged. Aditivo: no reemplaza nada.
+    """
+
+    schema_version: str = "control.pattern_progress.v1"
+    event_type: str = "pattern_progress"
+    control_run_id: str
+    media_run_id: str
+    unit_id: str
+    source_id: str | None = None
+    pattern_id: str
+    condition_id: str
+    subject_key: str
+    frame_index: int | None = None
+    timestamp_ms: float | None = None
+    mode: str  # "time" | "frames" — cual umbral rige (espeja _confirmation_met)
+    elapsed_ms: float | None = None      # solo mode=time
+    threshold_ms: float | None = None    # solo mode=time
+    elapsed_frames: int                  # = hit_count, siempre
+    threshold_frames: int | None = None  # solo si el patron define confirm_after_frames
+    progress: float                      # 0..1 clamp
+    experiment_id: str | None = None
+

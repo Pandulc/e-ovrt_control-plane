@@ -187,6 +187,7 @@ def execute_over_source(
     try:
         with (
             JsonlSink(artifacts.pattern_events_path) as pattern_sink,
+            JsonlSink(artifacts.pattern_progress_path) as progress_sink,
             JsonlSink(artifacts.alerts_path) as alert_sink,
             JsonlSink(artifacts.metrics_path) as metric_sink,
             JsonlSink(artifacts.errors_path) as error_sink,
@@ -230,6 +231,8 @@ def execute_over_source(
 
                 for pattern_event in result.pattern_events:
                     pattern_sink.write(pattern_event)
+                for progress_record in result.progress:
+                    progress_sink.write(progress_record)
                 for alert in result.alerts:
                     alert_sink.write(alert)  # persiste PRIMERO
                     if alert_publisher is not None:

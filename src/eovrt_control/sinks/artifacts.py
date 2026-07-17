@@ -21,6 +21,10 @@ class RunArtifacts:
         return self.run_dir / "pattern_events.jsonl"
 
     @property
+    def pattern_progress_path(self) -> Path:
+        return self.run_dir / "pattern_progress.jsonl"
+
+    @property
     def alerts_path(self) -> Path:
         return self.run_dir / "alerts.jsonl"
 
