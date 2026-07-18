@@ -1,0 +1,26 @@
+run:
+  id: null
+  scenario: DBE
+  name: control_replay_video16_clip10_yoloe
+  description: "Replay del clip video16_clip10 con YOLOE-26l (test de verificacion GT, 2026-07-18)."
+
+input:
+  type: media_jsonl
+  path: /home/simonll4/projects/e-ovrt_media-plane/runs/run_20260718_164231_dbe_yoloe_77d2a4/detections.jsonl
+
+patterns:
+  file: patterns/cr01_cr02_v2.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+
+outputs:
+  base_dir: ../runs
+  save_pattern_events_jsonl: true
+  save_alerts_jsonl: true
+  save_metrics_jsonl: true
+  save_errors_jsonl: true
+  save_summary_json: true
+
+logging:
+  level: INFO
