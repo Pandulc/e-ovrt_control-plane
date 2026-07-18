@@ -415,3 +415,25 @@ def test_received_units_unknown_run_404_and_missing_file_empty(client, tmp_path)
     (tmp_path / "runs" / run_id).mkdir(parents=True, exist_ok=True)
 
     assert client.get(f"/api/runs/{run_id}/received-units").json() == []
+
+
+def test_delete_run_terminado(client, tmp_path) -> None:
+    response = client.post("/api/runs", json={"mode": "replay", "config": _payload(tmp_path)})
+    run_id = response.json()["control_run_id"]
+    client.app.state.manager.join_active(timeout=30.0)
+
+    assert client.delete(f"/api/runs/{run_id}").status_code == 204
+    assert client.get(f"/api/runs/{run_id}").status_code == 404
+
+
+def test_delete_404_desconocido(client) -> None:
+    assert client.delete("/api/runs/nope").status_code == 404
+
+
+def test_delete_409_run_activo(client, tmp_path, bus_endpoint) -> None:
+    client.post("/api/runs", json={"mode": "live", "config": _idle_live_payload(bus_endpoint)})
+    try:
+        assert client.delete("/api/runs/idle-run").status_code == 409
+    finally:
+        client.app.state.manager.shutdown()
+        client.app.state.manager.join_active(timeout=15.0)

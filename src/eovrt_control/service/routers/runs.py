@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
+
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from eovrt_control.service.run_ids import require_valid_run_id
 from eovrt_control.service.run_manager import RunBusyError, RunManager, UnknownRunError
@@ -52,6 +54,21 @@ def get_run(run_id: str, request: Request):
         return _manager(request).get(run_id)
     except UnknownRunError as exc:
         raise HTTPException(status_code=404, detail=f"Run desconocido: {run_id}") from exc
+
+
+@router.delete("/runs/{run_id}", status_code=204)
+def delete_run(run_id: str, request: Request):
+    require_valid_run_id(run_id)
+    manager = _manager(request)
+    try:
+        info = manager.get(run_id)
+    except UnknownRunError as exc:
+        raise HTTPException(status_code=404, detail=f"Run desconocido: {run_id}") from exc
+    if info["status"] == "running":
+        raise HTTPException(status_code=409, detail="No se puede borrar un run activo")
+    run_dir = request.app.state.settings.runs_dir / run_id
+    shutil.rmtree(run_dir, ignore_errors=True)
+    return Response(status_code=204)
 
 
 @router.get("/runs/{run_id}/alerts")
