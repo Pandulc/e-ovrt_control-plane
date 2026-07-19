@@ -173,3 +173,286 @@ def test_gate_v2_scene_condition_episode_recall_and_re_alerts(tmp_path) -> None:
     assert evaluation.sub_threshold_count == 0
     matched_ids = {u.alert_id for u in evaluation.unexpected_alerts}
     assert matched_ids == {"a_early", "a_late_fp"}
+
+
+# A2 (doc 57 §6.7): un episodio cuyo clip termina antes del borde superior de su
+# ventana de matching (`duration_ms < start_ms + t_alert_max_ms`) no puede
+# distinguir "no alerto nunca" de "alerta valida truncada por el corte". Si queda
+# missed, se CENSURA (sale del denominador de recall) en vez de contarse como
+# fallo (`metric_censored`, ADR-006). Un episodio que SI matcheo cuenta normal.
+def test_a2_episodio_missed_con_clip_corto_se_censura_no_missed(tmp_path) -> None:
+    gt = {
+        "schema_version": "clip_gt.v2",
+        "clip_id": "a2_censor",
+        "duration_ms": 12000.0,
+        "episodes": [
+            # e1 evaluable: floor = 1000 + 10000 = 11000 <= 12000 -> NO censurado
+            {"id": "e1", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 1000.0, "end_ms": 11000.0},
+            # e2 censurado: floor = 5000 + 10000 = 15000 > 12000; sin alerta -> censored
+            {"id": "e2", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 5000.0, "end_ms": 12000.0},
+        ],
+    }
+    gt_path = tmp_path / "gt_a2.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+
+    # una sola alerta, matchea e1 (6000 in [5000, 11000]); e2 no tiene alerta
+    alerts = [_mk_alert(alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+                        source_id="s1", timestamp_ms=6000.0)]
+    alerts_path = tmp_path / "alerts_a2.jsonl"
+    _write_jsonl(alerts_path, alerts)
+
+    windows = {"CR-01": MatchingWindow(persistencia_min_ms=3000.0, t_alert_max_ms=10000.0)}
+    ev = evaluate_temporal_alerts(alerts_path, gt_path, matching_windows=windows)
+
+    assert ev.matched_alerts_count == 1
+    assert ev.missed_alerts_count == 0            # e2 NO cuenta como missed
+    assert ev.censored_episodes_count == 1
+    assert {c.episode_id for c in ev.censored_episodes} == {"e2"}
+    # recall sobre evaluables: 1 / (2 - 1) = 1.0, no 1/2 = 0.5
+    assert ev.recall == 1.0
+
+
+def test_a2_censura_parcial_mantiene_applicability_computed(tmp_path) -> None:
+    """Con >=1 episodio evaluable, recall es un numero real sobre los evaluables:
+    applicability_state sigue 'computed' (no un estado nuevo que rompa a un
+    consumidor que chequea == 'computed'); la censura se declara via
+    censored_episodes_count + warning."""
+    gt = {
+        "schema_version": "clip_gt.v2", "clip_id": "a2_partial",
+        "duration_ms": 12000.0,
+        "episodes": [
+            {"id": "e1", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 1000.0, "end_ms": 11000.0},  # evaluable
+            {"id": "e2", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 5000.0, "end_ms": 12000.0},  # censurado
+        ],
+    }
+    gt_path = tmp_path / "gt_partial.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+    alerts = [_mk_alert(alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+                        source_id="s1", timestamp_ms=6000.0)]
+    alerts_path = tmp_path / "alerts_partial.jsonl"
+    _write_jsonl(alerts_path, alerts)
+    windows = {"CR-01": MatchingWindow(persistencia_min_ms=3000.0, t_alert_max_ms=10000.0)}
+    ev = evaluate_temporal_alerts(alerts_path, gt_path, matching_windows=windows)
+    assert ev.applicability_state == "computed"
+    assert ev.censored_episodes_count == 1
+    assert any("metric_censored" in w for w in ev.warnings)
+
+
+def test_a2a4_censura_no_depende_del_orden_del_gt(tmp_path) -> None:
+    """Interaccion A2xA4: una alerta disputada por un episodio EVALUABLE y uno
+    CENSURABLE (ventanas solapadas, P8). El match debe ir al evaluable (TP
+    conocible) y el censurable quedar fuera del denominador — sin importar en
+    que orden esten listados en el GT. Aca el censurable va PRIMERO: el greedy
+    por orden de slot lo matchearia a el y dejaria al evaluable como missed
+    (recall 0.5). El correcto es recall 1.0 en ambos ordenes."""
+    gt = {
+        "schema_version": "clip_gt.v2", "clip_id": "a2a4_order",
+        "duration_ms": 12000.0,
+        "episodes": [
+            # CENSURABLE, listado primero: floor 5000+10000=15000 > 12000
+            {"id": "e_cens", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 5000.0, "end_ms": 12000.0},
+            # EVALUABLE: floor 1000+10000=11000 <= 12000
+            {"id": "e_ok", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 1000.0, "end_ms": 11000.0},
+        ],
+    }
+    gt_path = tmp_path / "gt_order.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+    # alerta en 10000: candidata de e_ok [4000,11000] y de e_cens [8000,15000]
+    alerts = [_mk_alert(alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+                        source_id="s1", timestamp_ms=10000.0)]
+    alerts_path = tmp_path / "alerts_order.jsonl"
+    _write_jsonl(alerts_path, alerts)
+    windows = {"CR-01": MatchingWindow(persistencia_min_ms=3000.0, t_alert_max_ms=10000.0)}
+    ev = evaluate_temporal_alerts(alerts_path, gt_path, matching_windows=windows)
+    assert ev.matched_alerts_count == 1
+    assert ev.missed_alerts_count == 0          # e_ok NO debe quedar missed
+    assert ev.censored_episodes_count == 1
+    assert {c.episode_id for c in ev.censored_episodes} == {"e_cens"}
+    assert ev.recall == 1.0
+
+
+def test_a2_todos_censurados_es_not_applicable(tmp_path) -> None:
+    """Si TODOS los episodios quedan censurados, no hay recall evaluable:
+    applicability_state='not_applicable' con causa, en vez de un recall=0 falso."""
+    gt = {
+        "schema_version": "clip_gt.v2", "clip_id": "a2_all",
+        "duration_ms": 12000.0,
+        "episodes": [
+            {"id": "e1", "condition_id": "CR-02", "level": "scene",
+             "source_id": "s1", "start_ms": 3000.0, "end_ms": 12000.0},  # floor 23000 > 12000
+        ],
+    }
+    gt_path = tmp_path / "gt_all.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+    alerts_path = tmp_path / "alerts_all.jsonl"
+    _write_jsonl(alerts_path, [])  # sin alertas
+    windows = {"CR-02": MatchingWindow(persistencia_min_ms=7000.0, t_alert_max_ms=20000.0)}
+    ev = evaluate_temporal_alerts(alerts_path, gt_path, matching_windows=windows)
+    assert ev.applicability_state == "not_applicable"
+    assert ev.applicability_cause == "all_episodes_metric_censored"
+    assert ev.censored_episodes_count == 1
+    assert ev.missed_alerts_count == 0
+
+
+def test_a2_episodio_con_clip_corto_pero_con_match_no_se_censura(tmp_path) -> None:
+    """La censura solo aplica a lo que seria missed: si el sistema alerto a
+    tiempo (dentro del clip), es un TP legitimo aunque el clip fuese corto."""
+    gt = {
+        "schema_version": "clip_gt.v2",
+        "clip_id": "a2_match",
+        "duration_ms": 12000.0,
+        "episodes": [
+            # floor = 5000 + 10000 = 15000 > 12000 (elegible a censura) PERO hay match
+            {"id": "e1", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 5000.0, "end_ms": 12000.0},
+        ],
+    }
+    gt_path = tmp_path / "gt_a2m.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+
+    # alerta a 10000 cae en [5000+3000, 5000+10000] = [8000, 15000] y < duration
+    alerts = [_mk_alert(alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+                        source_id="s1", timestamp_ms=10000.0)]
+    alerts_path = tmp_path / "alerts_a2m.jsonl"
+    _write_jsonl(alerts_path, alerts)
+
+    windows = {"CR-01": MatchingWindow(persistencia_min_ms=3000.0, t_alert_max_ms=10000.0)}
+    ev = evaluate_temporal_alerts(alerts_path, gt_path, matching_windows=windows)
+
+    assert ev.matched_alerts_count == 1
+    assert ev.censored_episodes_count == 0
+    assert ev.recall == 1.0
+
+
+# A3 (doc 57 §3.2 G1): FAR/hora sobre clips negativos = FP / horas observadas.
+# Expone tambien observed_duration_ms para que el reporte agregue Sigma FP /
+# Sigma horas entre varios clips soak (no promedio de tasas por clip).
+def test_a3_far_por_hora_en_clip_negativo(tmp_path) -> None:
+    gt = {
+        "schema_version": "clip_gt.v2",
+        "clip_id": "a3_soak",
+        "duration_ms": 3_600_000.0,   # 1 hora exacta
+        "negative": True,
+        "episodes": [],
+    }
+    gt_path = tmp_path / "gt_a3.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+
+    # 2 alertas: sin episodios ni sub_threshold, ambas son FP verdaderos
+    alerts = [
+        _mk_alert(alert_id="fp1", condition_id="CR-01", subject_key="CR-01:s1",
+                  source_id="s1", timestamp_ms=100000.0),
+        _mk_alert(alert_id="fp2", condition_id="CR-02", subject_key="CR-02:s1",
+                  source_id="s1", timestamp_ms=200000.0),
+    ]
+    alerts_path = tmp_path / "alerts_a3.jsonl"
+    _write_jsonl(alerts_path, alerts)
+
+    ev = evaluate_temporal_alerts(alerts_path, gt_path)
+
+    assert ev.unexpected_alerts_count == 2
+    assert ev.observed_duration_ms == 3_600_000.0
+    assert ev.far_per_hour == 2.0    # 2 FP / 1 h
+
+
+# A4 (doc 52 deuda A): dos episodios de misma condicion+clave con ventanas
+# solapadas (P8, entrada/salida) y 2 alertas, cada una en AMBAS ventanas. El
+# greedy le daba las dos al primer episodio (match + re_alert) y dejaba el 2do
+# como missed -> recall 0.5. El matching bipartito optimo asigna una alerta a
+# cada episodio -> recall 1.0, 0 re_alerts, 0 missed.
+def test_a4_matching_bipartito_no_deflaciona_recall_en_p8(tmp_path) -> None:
+    gt = {
+        "schema_version": "clip_gt.v2",
+        "clip_id": "a4_p8",
+        "duration_ms": 20000.0,   # >= 15000 (floor de e2): ninguno censurado
+        "episodes": [
+            # e1 window [3000+4000, 3000+10000] = [7000, 13000]
+            {"id": "e1", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 3000.0, "end_ms": 6000.0},
+            # e2 window [5000+4000, 5000+10000] = [9000, 15000]; solapa [9000,13000]
+            {"id": "e2", "condition_id": "CR-01", "level": "scene",
+             "source_id": "s1", "start_ms": 5000.0, "end_ms": 8000.0},
+        ],
+    }
+    gt_path = tmp_path / "gt_a4.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+
+    # ambas alertas caen en las dos ventanas (10000, 11000 estan en [9000,13000])
+    alerts = [
+        _mk_alert(alert_id="a1", condition_id="CR-01", subject_key="CR-01:s1",
+                  source_id="s1", timestamp_ms=10000.0),
+        _mk_alert(alert_id="a2", condition_id="CR-01", subject_key="CR-01:s1",
+                  source_id="s1", timestamp_ms=11000.0),
+    ]
+    alerts_path = tmp_path / "alerts_a4.jsonl"
+    _write_jsonl(alerts_path, alerts)
+
+    windows = {"CR-01": MatchingWindow(persistencia_min_ms=4000.0, t_alert_max_ms=10000.0)}
+    ev = evaluate_temporal_alerts(alerts_path, gt_path, matching_windows=windows)
+
+    assert ev.matched_alerts_count == 2      # greedy daba 1
+    assert ev.missed_alerts_count == 0       # greedy dejaba e2 missed
+    assert ev.re_alerts_count == 0           # greedy contaba 1 re_alert
+    assert ev.censored_episodes_count == 0
+    assert ev.recall == 1.0                  # greedy daba 0.5
+
+
+def test_a3_alerta_sin_timestamp_no_infla_far_y_razon_honesta(tmp_path) -> None:
+    """Review #2: una alerta sin timestamp_ms (fuente temporal anomala, doc 52
+    deuda C) no cae en ninguna ventana por no tener tiempo — no es 'fuera de las
+    ventanas' sino 'sin timestamp', y NO debe inflar FAR (rate sobre tiempo)."""
+    gt = {"schema_version": "clip_gt.v2", "clip_id": "a3_mixed",
+          "duration_ms": 3_600_000.0, "negative": True, "episodes": []}
+    gt_path = tmp_path / "gt_mixed.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+    alerts = [
+        _mk_alert(alert_id="fp_ts", condition_id="CR-01", subject_key="CR-01:s1",
+                  source_id="s1", timestamp_ms=100000.0),        # FP con tiempo
+        _mk_alert(alert_id="fp_none", condition_id="CR-01", subject_key="CR-01:s1",
+                  source_id="s1", timestamp_ms=None),            # sin timestamp
+    ]
+    alerts_path = tmp_path / "alerts_mixed.jsonl"
+    _write_jsonl(alerts_path, alerts)
+    ev = evaluate_temporal_alerts(alerts_path, gt_path)
+    assert ev.unexpected_alerts_count == 2
+    reasons = {u.alert_id: u.reason for u in ev.unexpected_alerts}
+    assert reasons["fp_none"] == "missing_timestamp"
+    assert reasons["fp_ts"] == "outside_all_episode_windows"
+    assert ev.far_per_hour == 1.0    # solo la FP con timestamp: 1 / 1 h
+
+
+def test_a3_observed_duration_en_early_return_no_temporal(tmp_path) -> None:
+    """Review #3: la corrida no-temporal (todas las alertas sin timestamp)
+    conserva observed_duration_ms (dato real) aunque far quede None."""
+    gt = {"schema_version": "clip_gt.v2", "clip_id": "a3_nt",
+          "duration_ms": 1_800_000.0, "negative": True, "episodes": []}
+    gt_path = tmp_path / "gt_nt.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+    alerts = [_mk_alert(alert_id="a", condition_id="CR-01", subject_key="CR-01:s1",
+                        source_id="s1", timestamp_ms=None)]
+    alerts_path = tmp_path / "alerts_nt.jsonl"
+    _write_jsonl(alerts_path, alerts)
+    ev = evaluate_temporal_alerts(alerts_path, gt_path)
+    assert ev.applicability_state == "not_applicable"
+    assert ev.applicability_cause == "non_temporal_source"
+    assert ev.observed_duration_ms == 1_800_000.0
+    assert ev.far_per_hour is None
+
+
+def test_a3_far_none_sin_duration(tmp_path) -> None:
+    gt = {"schema_version": "clip_gt.v2", "clip_id": "a3_nodur",
+          "negative": True, "episodes": []}
+    gt_path = tmp_path / "gt_a3n.json"
+    gt_path.write_text(json.dumps(gt), encoding="utf-8")
+    alerts_path = tmp_path / "alerts_a3n.jsonl"
+    _write_jsonl(alerts_path, [_mk_alert(alert_id="fp1", condition_id="CR-01",
+                subject_key="CR-01:s1", source_id="s1", timestamp_ms=1000.0)])
+    ev = evaluate_temporal_alerts(alerts_path, gt_path)
+    assert ev.far_per_hour is None
+    assert ev.observed_duration_ms is None

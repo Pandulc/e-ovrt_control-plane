@@ -246,6 +246,28 @@ def _resolve_matching_windows(
     return resolved
 
 
+def _episode_metric_censored(
+    duration_ms: float | None,
+    episode: ClipEpisodeV2,
+    window: MatchingWindow | EffectiveMatchingWindow,
+) -> float | None:
+    """A2 (doc 57 §6.7): devuelve el floor requerido si el clip es demasiado
+    corto para observar la ventana de matching COMPLETA del episodio
+    (`duration_ms < start_ms + t_alert_max_ms`), o `None` si es evaluable.
+
+    Es la condicion PRECISA nativa del evaluador: usa `t_alert_max_ms` (el techo
+    de latencia que ya define la ventana). No incluye resolve/cola — esos son
+    para observar el cierre del episodio (SDR), no para el matching de recall/
+    t_alert. Por eso este umbral es < que el gate de autoria de `derive_clip_gt`
+    (doc 57 §6.5, que suma resolve+cola): alli avisa temprano, aca censura solo
+    lo que realmente no se puede medir. Si `duration_ms` es None (fuente sin
+    duracion declarada) no se puede censurar: se evalua normal."""
+    if duration_ms is None:
+        return None
+    required = episode.start_ms + window.t_alert_max_ms
+    return required if duration_ms < required else None
+
+
 def _episode_key_matches(alert: AlertEvent, episode: ClipEpisodeV2) -> bool:
     if episode.level == "subject":
         return alert.subject_key == episode.subject_key
@@ -313,6 +335,23 @@ class SdrEpisodeResult(BaseModel):
     cause: str | None = None
 
 
+class CensoredEpisode(BaseModel):
+    """Episodio censurado para recall/t_alert-system (A2, doc 57 §6.7, ADR-006).
+
+    El clip termina antes del borde superior de la ventana de matching del
+    episodio (`duration_ms < start_ms + t_alert_max_ms`): una alerta valida pero
+    lenta podria haber caido despues del corte, asi que un `missed` NO es
+    concluyente. El episodio sale del denominador de recall en vez de contarse
+    como fallo. La causa es siempre `clip_too_short_for_t_alert_window`; los ms
+    quedan para auditar el margen faltante."""
+
+    episode_id: str
+    condition_id: str
+    cause: str = "clip_too_short_for_t_alert_window"
+    duration_ms: float | None = None
+    required_ms: float | None = None
+
+
 class TemporalAlertEvaluation(BaseModel):
     schema_version: str = "control.eval.temporal.v1"
     scenario_id: str
@@ -332,6 +371,17 @@ class TemporalAlertEvaluation(BaseModel):
     # Campos v2 (episodio, ADR-011/ADR-006). Aditivos: schema_version no cambia.
     re_alerts_count: int = 0
     sub_threshold_count: int = 0
+    # A2 (doc 57 §6.7, ADR-006): episodios censurados para recall/t_alert por
+    # clip demasiado corto. NO entran al denominador de recall ni cuentan como
+    # missed. Aditivos: default 0/[].
+    censored_episodes_count: int = 0
+    # A3 (doc 57 §3.2 G1): tasa de falsas alarmas por hora. `far_per_hour` =
+    # unexpected_alerts_count / (observed_duration_ms / 3.6e6). Ambos aditivos y
+    # solo en el path v2 (v1 no tiene ms). El reporte agrega Sigma FP / Sigma
+    # duracion entre clips soak (no promedia tasas por clip) — por eso se expone
+    # `observed_duration_ms` ademas del cociente por clip.
+    observed_duration_ms: float | None = None
+    far_per_hour: float | None = None
     applicability_state: str | None = None
     applicability_cause: str | None = None
     avg_latency_ms_from_episode_start: float | None = None
@@ -344,6 +394,7 @@ class TemporalAlertEvaluation(BaseModel):
     matches: list[AlertMatch] = Field(default_factory=list)
     missed_alerts: list[MissedAlert] = Field(default_factory=list)
     unexpected_alerts: list[UnexpectedAlert] = Field(default_factory=list)
+    censored_episodes: list[CensoredEpisode] = Field(default_factory=list)
     # --- SDR + TTFD (spec 43 SS10). Aditivos: no rompen el schema ni el gate
     # F1=1.0. Se llenan solo si `evaluate_temporal_alerts` recibe
     # `detections_path`; sin eso quedan en sus defaults (None/[]) con
@@ -927,17 +978,33 @@ def _evaluate_v2(
             f1=0.0,
             applicability_state="not_applicable",
             applicability_cause="non_temporal_source",
+            # Review #3: FAR es indefinido sin timestamps (queda None), pero la
+            # duracion observada es dato real — no se descarta (util para la
+            # agregacion de cobertura del reporte).
+            observed_duration_ms=ground_truth.duration_ms,
             warnings=warnings,
             effective_matching_windows=effective_windows,
         )
 
-    consumed_alert_ids: set[str] = set()
     matched_count = 0
     re_alerts_count = 0
     missed_count = 0
+    censored: list[CensoredEpisode] = []
     latencies: list[float] = []
 
-    for episode in ground_truth.episodes:
+    # A4 (doc 52 deuda A): matching BIPARTITO episodio<->alerta, no greedy. El
+    # greedy asignaba a cada episodio, en orden, su alerta candidata mas
+    # temprana y la consumia; con dos episodios de la misma condicion+clave y
+    # ventanas solapadas (P8, entrada/salida) el primer episodio se quedaba con
+    # TODAS las alertas (una match + el resto re_alerts) y el segundo caia a
+    # missed, deflacionando recall. El matching maximo asigna a lo sumo una
+    # alerta por episodio y una alerta a lo sumo a un episodio, maximizando la
+    # cantidad de episodios cubiertos (recall correcto).
+    #
+    # Solo participan episodios con ventana resuelta; los que no tienen ventana
+    # (config gap) se cuentan como missed con un warning, igual que antes.
+    episodes_with_window: list[tuple[int, ClipEpisodeV2, EffectiveMatchingWindow]] = []
+    for index, episode in enumerate(ground_truth.episodes):
         window = effective_windows.get(episode.condition_id)
         if window is None:
             warnings.append(
@@ -946,41 +1013,118 @@ def _evaluate_v2(
             )
             missed_count += 1
             continue
+        episodes_with_window.append((index, episode, window))
 
-        candidates = sorted(
-            (
-                alert
-                for alert in alerts
-                # Una alerta ya consumida (match o re_alert) por un episodio previo
-                # no puede volver a matchear otro episodio: dos episodios del mismo
-                # condition_id + clave con ventanas solapadas (t_alert_max_ms llega
-                # a 10-20s) comparten alertas candidatas, y sin esta exclusion una
-                # sola alerta infla matched_alerts_count/recall en ambos episodios.
-                if alert.alert_id not in consumed_alert_ids
-                and alert.condition_id == episode.condition_id
-                and _episode_key_matches(alert, episode)
-                and _alert_in_episode_window(alert, episode, window)
-            ),
-            key=lambda alert: alert.timestamp_ms,
+    # Interaccion A2xA4: el matching bipartito maximiza cardinalidad pero es
+    # ciego a la distincion censurable/no-censurable. Ante una alerta disputada
+    # por dos episodios de ventanas solapadas (P8), a cual dejar sin asignar no
+    # puede depender del orden del GT: hay que dejar sin asignar al CENSURABLE
+    # (que sale del denominador via censura) y matchear al EVALUABLE (un TP
+    # conocible que, si queda sin match, seria un `missed` real que deprime el
+    # recall). Se ordenan los slots con los no-censurables primero: Kuhn los
+    # procesa antes, maximiza los no-censurables matcheados y el augmenting nunca
+    # desmatchea uno ya asignado, asi que los censurables quedan como los
+    # sobrantes. Estable (sort de Python): preserva el orden original dentro de
+    # cada grupo -> determinismo y preferencia por la 1a confirmacion intacta.
+    episodes_with_window.sort(
+        key=lambda ew: _episode_metric_censored(ground_truth.duration_ms, ew[1], ew[2])
+        is not None
+    )
+
+    # Adyacencia: para cada episodio, sus alertas candidatas ordenadas por
+    # timestamp (la mas temprana primero -> el matching prefiere la primera
+    # confirmacion para la latencia). El grafo solo conecta alertas que caen en
+    # la ventana de matching de ese episodio (condicion + clave + [lo, hi]).
+    candidate_lists: list[list[AlertEvent]] = []
+    for _index, episode, window in episodes_with_window:
+        candidate_lists.append(
+            sorted(
+                (
+                    alert
+                    for alert in alerts
+                    if alert.condition_id == episode.condition_id
+                    and _episode_key_matches(alert, episode)
+                    and _alert_in_episode_window(alert, episode, window)
+                ),
+                key=lambda alert: alert.timestamp_ms,
+            )
         )
-        if not candidates:
-            missed_count += 1
-            continue
 
-        first = candidates[0]
-        consumed_alert_ids.add(first.alert_id)
-        matched_count += 1
-        latencies.append(first.timestamp_ms - episode.start_ms)
-        for extra in candidates[1:]:
-            consumed_alert_ids.add(extra.alert_id)
-            re_alerts_count += 1
+    # Kuhn (augmenting paths). Tamano diminuto (pocos episodios/alertas por
+    # clip): O(V*E) es trivial. `alert_to_slot[alert_id]` = indice en
+    # `episodes_with_window` al que quedo asignada esa alerta.
+    alert_to_slot: dict[str, int] = {}
+
+    def _augment(slot: int, visited: set[str]) -> bool:
+        for alert in candidate_lists[slot]:
+            if alert.alert_id in visited:
+                continue
+            visited.add(alert.alert_id)
+            holder = alert_to_slot.get(alert.alert_id)
+            if holder is None or _augment(holder, visited):
+                alert_to_slot[alert.alert_id] = slot
+                return True
+        return False
+
+    for slot in range(len(episodes_with_window)):
+        _augment(slot, set())
+
+    slot_to_alert: dict[int, AlertEvent] = {}
+    alert_by_id = {alert.alert_id: alert for alert in alerts}
+    for alert_id, slot in alert_to_slot.items():
+        slot_to_alert[slot] = alert_by_id[alert_id]
+
+    matched_alert_ids = set(alert_to_slot.keys())
+    # Una alerta candidata de ALGUN episodio pero no asignada como match es una
+    # re_alert (ADR-011: no es FP), no importa de que episodio sea candidata.
+    candidate_alert_ids = {alert.alert_id for cands in candidate_lists for alert in cands}
+    re_alert_ids = candidate_alert_ids - matched_alert_ids
+    re_alerts_count = len(re_alert_ids)
+
+    for slot, (_index, episode, window) in enumerate(episodes_with_window):
+        matched_alert = slot_to_alert.get(slot)
+        if matched_alert is not None:
+            matched_count += 1
+            latencies.append(matched_alert.timestamp_ms - episode.start_ms)
+            continue
+        # A2: un episodio sin match cuyo clip no cubre la ventana completa no es
+        # concluyente -> se censura (fuera del denominador de recall) en vez de
+        # contarse como fallo (doc 57 §6.7, ADR-006).
+        required = _episode_metric_censored(ground_truth.duration_ms, episode, window)
+        if required is not None:
+            censored.append(
+                CensoredEpisode(
+                    episode_id=episode.id,
+                    condition_id=episode.condition_id,
+                    duration_ms=ground_truth.duration_ms,
+                    required_ms=required,
+                )
+            )
+            continue
+        missed_count += 1
 
     unexpected: list[UnexpectedAlert] = []
     sub_threshold_count = 0
     for alert in alerts:
-        if alert.alert_id in consumed_alert_ids:
+        if alert.alert_id in matched_alert_ids or alert.alert_id in re_alert_ids:
             continue
-        in_sub_threshold = alert.timestamp_ms is not None and any(
+        # Review #2: una alerta sin timestamp no pudo entrar a ninguna ventana
+        # por no tener tiempo (fuente temporal anomala, doc 52 deuda C). NO es
+        # "fuera de las ventanas" — es "sin timestamp": razon honesta, y se
+        # excluye del numerador de FAR (rate sobre tiempo). Cuenta en unexpected
+        # (es una alerta que se disparo y no matcheo) para no maquillar precision.
+        if alert.timestamp_ms is None:
+            unexpected.append(
+                UnexpectedAlert(
+                    alert_id=alert.alert_id,
+                    condition_id=alert.condition_id,
+                    subject_key=alert.subject_key,
+                    frame_index=alert.frame_index,
+                    reason="missing_timestamp",
+                )
+            )
+            continue
+        in_sub_threshold = any(
             event.condition_id == alert.condition_id and event.start_ms <= alert.timestamp_ms <= event.end_ms
             for event in ground_truth.sub_threshold_events
         )
@@ -1000,11 +1144,48 @@ def _evaluate_v2(
     unexpected_count = len(unexpected)
     # ADR-011: re_alerts y sub_threshold NO son FP, no entran al denominador de precision.
     precision = _safe_div(matched_count, matched_count + unexpected_count)
-    recall = _safe_div(matched_count, len(ground_truth.episodes))
+    # A2 (doc 57 §6.7): los episodios censurados salen del denominador de recall.
+    # Si TODOS quedan censurados no hay recall evaluable (denominador 0): se
+    # declara `not_applicable:all_episodes_metric_censored` en vez de un recall=0
+    # enganoso. Con censura PARCIAL el estado sigue `computed` (recall real sobre
+    # los evaluables) — ver el bloque de applicability mas abajo.
+    evaluable_episodes = len(ground_truth.episodes) - len(censored)
+    recall = _safe_div(matched_count, evaluable_episodes)
     f1 = round((2 * precision * recall) / (precision + recall), 6) if precision + recall else 0.0
+
+    # ADR-006: con >=1 episodio evaluable el recall ES un numero real sobre los
+    # evaluables, asi que el estado sigue `computed` (no un estado nuevo que rompa
+    # a un consumidor que chequea == "computed"); la censura parcial se declara
+    # via `censored_episodes_count` + warning. Solo si TODOS quedan censurados no
+    # hay recall evaluable -> `not_applicable` con causa.
+    applicability_state = "computed"
+    applicability_cause = None
+    if censored:
+        if evaluable_episodes == 0:
+            applicability_state = "not_applicable"
+            applicability_cause = "all_episodes_metric_censored"
+        warnings.append(
+            f"metric_censored: {len(censored)} de {len(ground_truth.episodes)} episodios "
+            "quedan fuera del denominador de recall/t_alert por clip demasiado corto "
+            "(doc 57 §6.7) — recall se reporta sobre los evaluables."
+        )
 
     for message in warnings:
         logger.warning(message)
+
+    # A3 (doc 57 §3.2 G1): FAR/hora = FP / horas observadas. `duration_ms` es el
+    # tiempo observado del clip (en clips soak negativos, todo el clip es tiempo
+    # "aburrido" donde un FP es una falsa alarma operativa real).
+    duration_ms = ground_truth.duration_ms
+    # Review #2: FAR es un rate sobre tiempo -> solo las FP ubicables en el
+    # tiempo (con timestamp) entran al numerador; las `missing_timestamp` cuentan
+    # en unexpected/precision pero no en FAR.
+    timestamped_fp = sum(1 for u in unexpected if u.reason != "missing_timestamp")
+    far_per_hour = (
+        round(timestamped_fp / (duration_ms / 3_600_000.0), 6)
+        if duration_ms is not None and duration_ms > 0
+        else None
+    )
 
     return TemporalAlertEvaluation(
         scenario_id=ground_truth.clip_id,
@@ -1018,13 +1199,17 @@ def _evaluate_v2(
         duplicate_alerts_count=0,
         re_alerts_count=re_alerts_count,
         sub_threshold_count=sub_threshold_count,
+        censored_episodes_count=len(censored),
+        observed_duration_ms=duration_ms,
+        far_per_hour=far_per_hour,
         precision=precision,
         recall=recall,
         f1=f1,
         avg_latency_ms_from_episode_start=round(mean(latencies), 6) if latencies else None,
-        applicability_state="computed",
-        applicability_cause=None,
+        applicability_state=applicability_state,
+        applicability_cause=applicability_cause,
         effective_matching_windows=effective_windows,
         warnings=warnings,
         unexpected_alerts=unexpected,
+        censored_episodes=censored,
     )
