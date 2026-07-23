@@ -25,7 +25,13 @@ input:
       poll_interval_s: 5
 
 patterns:
-  file: patterns/cr01_cr02_v1.yaml
+  # v2, NO v1 (doc 59 SS7, dry-run 2026-07-22): v2 es el pattern set OFICIAL
+  # que cita la Tabla 24/D.4 -- CR-01 high confirm_after_ms=4000, CR-02 medium
+  # confirm_after_ms=7000. `derive_clip_gt` usa esos mismos umbrales por
+  # defecto: si el motor corre con v1 (CR-01 medium, sin confirm_after_ms) los
+  # intervalos entre ambos se vuelven episodios que el motor nunca confirma ->
+  # falsos `missed` y recall deprimido, sin que nada falle a la vista.
+  file: patterns/cr01_cr02_v2.yaml
   active_ids:
     - CR-01
     - CR-02
