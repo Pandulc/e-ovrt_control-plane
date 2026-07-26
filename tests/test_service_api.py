@@ -235,6 +235,10 @@ def test_current_reports_the_active_run_and_its_progress(client, bus_endpoint) -
             "pattern_events_count", "alerts_count", "bus_dropped_events",
         }
         assert body["progress"]["units_processed"] == 0
+        # No hay ningun patron confirmado/sustenido todavia (bus idle): lista vacia,
+        # pero la clave siempre esta presente para que la consola no tenga que
+        # distinguir "sin engine" de "sin patrones activos".
+        assert body["patterns"] == []
     finally:
         client.app.state.manager.shutdown()
         client.app.state.manager.join_active(timeout=30.0)
@@ -331,6 +335,70 @@ def test_pattern_progress_endpoint_missing_file_returns_empty(client, tmp_path) 
     (run_dir / "pattern_progress.jsonl").unlink(missing_ok=True)
 
     response = client.get("/api/runs/api-run/pattern-progress")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_pattern_events_endpoint_serves_rows(client, tmp_path) -> None:
+    """Espejo de test_pattern_progress_endpoint_serves_rows, pero para
+    pattern_events.jsonl: es el UNICO archivo con el ciclo de vida completo
+    candidate->confirmed->sustained->resolved (pattern_progress.jsonl solo
+    tiene candidate; alerts.jsonl solo tiene confirmed). Sin este endpoint,
+    la traza post-corrida de la webconsole no puede reconstruir si un riesgo
+    seguia activo en un frame posterior a la confirmacion."""
+    client.post("/api/runs", json={"mode": "replay", "config": _payload(tmp_path)})
+    client.app.state.manager.join_active(timeout=30.0)
+
+    run_dir = tmp_path / "runs" / "api-run"
+    events_path = run_dir / "pattern_events.jsonl"
+    events_path.write_text(
+        "\n".join(json.dumps({"state": s}) for s in ("candidate", "confirmed", "sustained", "resolved"))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/runs/api-run/pattern-events")
+    assert response.status_code == 200
+    rows = response.json()
+    assert [r["state"] for r in rows] == ["candidate", "confirmed", "sustained", "resolved"]
+
+    limited = client.get("/api/runs/api-run/pattern-events?limit=2")
+    assert [r["state"] for r in limited.json()] == ["candidate", "confirmed"]
+
+
+def test_pattern_events_endpoint_unknown_run_404(client) -> None:
+    assert client.get("/api/runs/no-existe/pattern-events").status_code == 404
+
+
+def test_pattern_events_endpoint_missing_file_returns_empty(client, tmp_path) -> None:
+    client.post("/api/runs", json={"mode": "replay", "config": _payload(tmp_path)})
+    client.app.state.manager.join_active(timeout=30.0)
+
+    run_dir = tmp_path / "runs" / "api-run"
+    (run_dir / "pattern_events.jsonl").unlink(missing_ok=True)
+
+    response = client.get("/api/runs/api-run/pattern-events")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_pattern_events_endpoint_empty_file_from_real_run(client, tmp_path) -> None:
+    """Caso realista, espejo del analogo de pattern-progress: JsonlSink crea
+    pattern_events.jsonl en modo "w" incondicionalmente. count=0 (sin
+    detecciones en absoluto) para que el patron nunca dispare -- con
+    count=1 (el default de _payload) CR-01 confirma en el primer frame y
+    pattern_events.jsonl NO queda vacio (a diferencia de pattern_progress.jsonl,
+    que solo registra "candidate" y por eso SI queda vacio con ese mismo
+    fixture: confirm_after_frames=1 salta directo de inactive a confirmed)."""
+    client.post("/api/runs", json={"mode": "replay", "config": _payload(tmp_path, count=0)})
+    client.app.state.manager.join_active(timeout=30.0)
+
+    run_dir = tmp_path / "runs" / "api-run"
+    events_path = run_dir / "pattern_events.jsonl"
+    assert events_path.exists()
+    assert events_path.read_text(encoding="utf-8") == ""
+
+    response = client.get("/api/runs/api-run/pattern-events")
     assert response.status_code == 200
     assert response.json() == []
 

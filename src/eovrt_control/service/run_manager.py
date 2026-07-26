@@ -224,6 +224,36 @@ class RunManager:
             rows = rows[: max(limit, 0)]
         return rows
 
+    def pattern_events(self, run_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        """Espejo de `pattern_progress`, pero para `pattern_events.jsonl`: es el
+        UNICO archivo con el ciclo de vida completo candidate->confirmed->
+        sustained->resolved (pattern_progress.jsonl solo tiene candidate;
+        alerts.jsonl solo tiene confirmed). Fuente para que la webconsole
+        reconstruya, en la traza post-corrida, si un riesgo seguia activo en
+        un frame posterior a la confirmacion."""
+        run_dir = self._run_dir(run_id)
+        if not run_dir.is_dir():
+            raise UnknownRunError(run_id)
+        path = run_dir / "pattern_events.jsonl"
+        if not path.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as fh:
+            for line_no, line in enumerate(fh, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    # Linea corrupta (kill a mitad de escritura): se saltea, no
+                    # se rompe el endpoint entero por una sola linea ilegible.
+                    logger.warning(
+                        "evento de patron ilegible en %s linea %d: %s", run_id, line_no, exc
+                    )
+        if limit is not None:
+            rows = rows[: max(limit, 0)]
+        return rows
+
     def list_runs(self, media_run_id: str | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         runs_dir = self._settings.runs_dir
@@ -355,6 +385,18 @@ class RunManager:
                 "alerts_count": active.progress.alerts_count,
                 "bus_dropped_events": active.progress.bus_dropped_events,
             },
+            # Patrones actualmente activos (confirmed/sustained), leidos en vivo
+            # del estado en memoria del motor (`PatternEngine.snapshot_active()`).
+            # `alerts.jsonl` solo tiene el flanco de subida y esta buffereado
+            # (los `JsonlSink` no hacen flush); `pattern_progress.jsonl` se apaga
+            # justo al confirmarse; esta es la unica fuente que ve confirmed->
+            # resolved completo mientras la corrida esta corriendo. Lista vacia
+            # si el engine todavia no se publico (arranque) o no hay nada activo.
+            "patterns": (
+                active.progress.engine.snapshot_active()
+                if active.progress.engine is not None
+                else []
+            ),
         }
 
     def _execute(self, active: ActiveRun) -> None:

@@ -70,6 +70,7 @@ class PatternEngine:
     ) -> None:
         self.control_run_id = control_run_id
         self.patterns = patterns
+        self._patterns_by_id = {pattern.id: pattern for pattern in patterns}
         # ADR-004: identificador de experimento, propagado a cada evento
         # emitido por este motor (no solo al RunSummary).
         self.experiment_id = experiment_id
@@ -77,6 +78,53 @@ class PatternEngine:
         # Instante monotonico de recepcion de la unidad en curso (Task 2);
         # process() lo actualiza en cada llamada.
         self._current_ts_receive_ms: float | None = None
+
+    def snapshot_active(self) -> list[dict[str, object]]:
+        """Foto de solo lectura de los patrones activos ahora mismo (`confirmed`
+        o `sustained`). Sin efectos: no toca `self._state`.
+
+        Pensada para exponerse por HTTP (`GET /api/runs/current`) mientras la
+        corrida esta en curso: es la unica fuente que ve `confirmed`->`resolved`
+        completo en memoria (los artefactos en disco no alcanzan, ver informe).
+        Copia la lista de items antes de iterar porque el hilo de ejecucion puede
+        estar mutando `self._state` concurrentemente.
+
+        Dos campos de tiempo, con semantica DISTINTA -- no confundirlos:
+        - `since_timestamp_ms` (= `first_hit_timestamp_ms`) es tiempo de
+          FUENTE/frame: en video_file/image_folder puede ser relativo al
+          archivo (p.ej. 0.0 en la primera unidad), no wallclock. Sirve para
+          correlacionar con `detections.jsonl`/frames, no para "hace cuanto".
+        - `active_ms` es tiempo transcurrido REAL, medido por este proceso con
+          el mismo reloj monotonico que ya usa `alert_registered_ms`
+          (`time.monotonic() * 1000.0`), contra el hito de primera evidencia
+          del episodio (`first_evidence_monotonic_ms`). Es el que un consumidor
+          HTTP debe usar para mostrar "hace Ns" -- el bug que motivo este campo
+          fue exactamente mostrar since_timestamp_ms como si fuera wallclock en
+          una corrida video_file y obtener "hace 1785005982s".
+        """
+        items = list(self._state.items())
+        active: list[dict[str, object]] = []
+        now_monotonic_ms = time.monotonic() * 1000.0
+        for (pattern_id, subject_key), runtime_state in items:
+            if runtime_state.state not in {"confirmed", "sustained"}:
+                continue
+            pattern = self._patterns_by_id.get(pattern_id)
+            active_ms: float | None = None
+            if runtime_state.first_evidence_monotonic_ms is not None:
+                active_ms = max(0.0, now_monotonic_ms - runtime_state.first_evidence_monotonic_ms)
+            active.append(
+                {
+                    "pattern_id": pattern_id,
+                    "condition_id": pattern.condition_id if pattern is not None else pattern_id,
+                    "severity": pattern.severity if pattern is not None else None,
+                    "subject_key": subject_key,
+                    "state": runtime_state.state,
+                    "since_timestamp_ms": runtime_state.first_hit_timestamp_ms,
+                    "active_ms": active_ms,
+                    "subjects_in_evidence": runtime_state.max_subjects_in_evidence,
+                }
+            )
+        return active
 
     def process(
         self, event: DetectionEvent, ts_receive_ms: float | None = None

@@ -93,6 +93,20 @@ def get_run_pattern_progress(
         raise HTTPException(status_code=404, detail=f"Run desconocido: {run_id}") from exc
 
 
+@router.get("/runs/{run_id}/pattern-events")
+def get_run_pattern_events(
+    run_id: str, request: Request, limit: int | None = Query(default=None, ge=0)
+):
+    """Ciclo de vida completo por patron (candidate/confirmed/sustained/resolved).
+    Espejo de /pattern-progress. Fuente para que la webconsole reconstruya en la
+    traza post-corrida si un riesgo seguia activo mas alla del frame de alerta."""
+    require_valid_run_id(run_id)
+    try:
+        return _manager(request).pattern_events(run_id, limit=limit)
+    except UnknownRunError as exc:
+        raise HTTPException(status_code=404, detail=f"Run desconocido: {run_id}") from exc
+
+
 @router.get("/runs/{run_id}/received-units")
 def get_run_received_units(
     run_id: str, request: Request, limit: int | None = Query(default=None, ge=0)

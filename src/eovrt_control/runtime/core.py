@@ -52,6 +52,13 @@ class RunProgress:
     pattern_events_count: int = 0
     alerts_count: int = 0
     bus_dropped_events: int = 0
+    # Referencia al PatternEngine de la corrida en curso (solo-lectura desde el
+    # hilo del servidor via `PatternEngine.snapshot_active()`). Se asigna UNA
+    # sola vez, al arrancar `execute_over_source`, y nunca se reasigna: es una
+    # simple referencia de objeto, atomica bajo el GIL igual que los enteros de
+    # arriba. `snapshot_active()` es quien hace la copia defensiva de
+    # `PatternEngine._state` antes de iterar, no este campo.
+    engine: PatternEngine | None = None
 
 
 @dataclass
@@ -153,6 +160,10 @@ def execute_over_source(
         patterns=active_patterns,
         experiment_id=config.run.experiment_id,
     )
+    if progress is not None:
+        # Publicar el engine ANTES del bucle: `GET /api/runs/current` puede
+        # llegar en cualquier momento de la corrida, incluida la primera unidad.
+        progress.engine = engine
 
     started_at = _utc_now()
     media_run_ids: set[str] = set()

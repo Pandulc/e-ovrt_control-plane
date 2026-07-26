@@ -1,3 +1,5 @@
+import pytest
+
 from eovrt_control.config import PatternDefinition, PatternTimingConfig, load_patterns_file
 from eovrt_control.contracts.media import Detection, DetectionEvent
 from eovrt_control.engine.pattern_engine import PatternEngine
@@ -641,3 +643,104 @@ def test_progress_does_not_alter_state_machine_or_alerts() -> None:
     engine.process(_event_at(0.0, 0))
     r = engine.process(_event_at(1000.0, 1))
     assert len(r.alerts) == 1  # el comportamiento previo de confirmacion no cambia
+
+
+def test_snapshot_active_is_empty_when_nothing_was_ever_processed() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_lifecycle_pattern()])
+    assert engine.snapshot_active() == []
+
+
+def test_snapshot_active_excludes_a_candidate_pattern() -> None:
+    # confirm_after_frames=2: el primer hit deja el patron en "candidate".
+    engine = PatternEngine(
+        control_run_id="control-run",
+        patterns=[_lifecycle_pattern(confirm_after_frames=2)],
+    )
+    result = engine.process(_event_at(0.0, 0))
+    assert [e.state for e in result.pattern_events] == ["candidate"]
+
+    assert engine.snapshot_active() == []
+
+
+def test_snapshot_active_includes_a_confirmed_pattern() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_lifecycle_pattern()])
+    result = engine.process(_event_at(0.0, 0))
+    assert [e.state for e in result.pattern_events] == ["confirmed"]
+
+    snapshot = engine.snapshot_active()
+    assert len(snapshot) == 1
+    entry = snapshot[0]
+    assert entry["pattern_id"] == "CR-01"
+    assert entry["condition_id"] == "CR-01"
+    assert entry["severity"] == "medium"
+    assert entry["subject_key"]
+    assert entry["state"] == "confirmed"
+    assert entry["since_timestamp_ms"] == 0.0
+    assert entry["subjects_in_evidence"] == 1
+
+
+def test_snapshot_active_includes_a_sustained_pattern() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_lifecycle_pattern()])
+    engine.process(_event_at(0.0, 0))
+    result = engine.process(_event_at(100.0, 1))
+    assert [e.state for e in result.pattern_events] == ["sustained"]
+
+    snapshot = engine.snapshot_active()
+    assert len(snapshot) == 1
+    assert snapshot[0]["state"] == "sustained"
+    # since_timestamp_ms sigue anclado al primer hit del episodio, no al ultimo.
+    assert snapshot[0]["since_timestamp_ms"] == 0.0
+
+
+def test_snapshot_active_drops_a_resolved_pattern() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_lifecycle_pattern()])
+    engine.process(_event_at(0.0, 0))
+    assert len(engine.snapshot_active()) == 1
+
+    resolved = engine.process(_event_at(500.0, 1, has_helmet=True))
+    assert [e.state for e in resolved.pattern_events] == ["resolved"]
+
+    assert engine.snapshot_active() == []
+
+
+def test_snapshot_active_reports_active_ms_from_monotonic_clock(monkeypatch) -> None:
+    """active_ms es tiempo transcurrido REAL (monotonico), no source/media time.
+
+    since_timestamp_ms (first_hit_timestamp_ms) puede ser relativo al video
+    (p.ej. 0.0 en la primera unidad de un archivo) y NO sirve para calcular
+    "hace cuanto esta activo" contra un reloj de pared -- ese fue el bug real
+    detectado con una corrida video_file -> el frontend mostraba "hace
+    1785005982s". active_ms lo calcula el motor con el mismo reloj monotonico
+    que ya usa alert_registered_ms, asi el frontend no tiene que adivinar.
+    """
+    engine = PatternEngine(control_run_id="control-run", patterns=[_lifecycle_pattern()])
+    monkeypatch.setattr("eovrt_control.engine.pattern_engine.time.monotonic", lambda: 10.0)
+    engine.process(_event_at(0.0, 0), ts_receive_ms=10.0 * 1000.0)
+
+    monkeypatch.setattr("eovrt_control.engine.pattern_engine.time.monotonic", lambda: 16.5)
+    snapshot = engine.snapshot_active()
+    assert len(snapshot) == 1
+    assert snapshot[0]["active_ms"] == pytest.approx(6500.0)
+
+
+def test_snapshot_active_reports_none_active_ms_without_first_evidence_monotonic() -> None:
+    """Sin ts_receive_ms (p.ej. replay offline sin ese hito) active_ms es None,
+    nunca 0 inventado."""
+    engine = PatternEngine(control_run_id="control-run", patterns=[_lifecycle_pattern()])
+    engine.process(_event_at(0.0, 0))  # ts_receive_ms=None (default)
+
+    snapshot = engine.snapshot_active()
+    assert len(snapshot) == 1
+    assert snapshot[0]["active_ms"] is None
+
+
+def test_snapshot_active_clamps_active_ms_to_zero_never_negative(monkeypatch) -> None:
+    """Si el reloj retrocede o el proceso lee el snapshot antes del propio
+    hito (ventana de carrera entre hilos), active_ms nunca es negativo."""
+    engine = PatternEngine(control_run_id="control-run", patterns=[_lifecycle_pattern()])
+    monkeypatch.setattr("eovrt_control.engine.pattern_engine.time.monotonic", lambda: 10.0)
+    engine.process(_event_at(0.0, 0), ts_receive_ms=10.0 * 1000.0)
+
+    monkeypatch.setattr("eovrt_control.engine.pattern_engine.time.monotonic", lambda: 9.0)
+    snapshot = engine.snapshot_active()
+    assert snapshot[0]["active_ms"] == 0.0
