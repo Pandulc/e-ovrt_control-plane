@@ -16,7 +16,8 @@ def test_load_replay_config_resolves_patterns_file() -> None:
     config = load_replay_config(Path("configs/replay_dbe_cr01_cr02.yaml"))
 
     assert config.patterns_file is not None
-    assert config.patterns_file.pattern_set.id == "cr01_cr02_v1"
+    # La config DBE activa apunta al pattern set vigente v2 (v1 deprecado, F-DR9).
+    assert config.patterns_file.pattern_set.id == "cr01_cr02_v2"
     assert [pattern.id for pattern in config.patterns_file.active_patterns(["CR-01"])] == ["CR-01"]
 
 

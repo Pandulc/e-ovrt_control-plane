@@ -9,7 +9,11 @@ input:
   path: ../../e-ovrt_media-plane/runs/latest/detections.jsonl
 
 patterns:
-  file: patterns/cr01_cr02_v1.yaml
+  # v2, NO v1 (F-DR9, doc 59 SS7): v2 es el pattern set OFICIAL — CR-01 high
+  # confirm_after_ms=4000, CR-02 medium confirm_after_ms=7000, granularity
+  # scene. Con v1 (timing por frames) los episodios de `derive_clip_gt` nunca
+  # se confirman -> falsos `missed` y recall deprimido sin error visible.
+  file: patterns/cr01_cr02_v2.yaml
   active_ids:
     - CR-01
     - CR-02

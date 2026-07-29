@@ -1,5 +1,71 @@
 # Progreso
 
+## 2026-07-29 — puesta al dia (lo implementado desde 2026-07-02)
+
+Resumen de `git log --since=2026-07-02` en `feature/control-service` y de los
+docs de operacion del repo `docs` (33/34, 37/38, 51/52). Todo lo listado abajo
+esta commiteado en la rama salvo indicacion contraria.
+
+- **G0 — granularidad de escena** (`46c855b`, 2026-07-10, docs 33/34): clave de
+  estado por escena `(pattern_id, source_id)`, aplicabilidad por temporalidad
+  de fuente (ADR-0013: sobre imagenes la evaluacion de patrones es
+  `not_applicable / non_temporal_source`, la corrida no se rechaza) y schema
+  `clip_gt.v2`. Falsacion del ADR-0012 superada (gate F1 = 1.0 en ambas
+  granularidades sin memoria de cobertura bajo escena).
+- **Bus + runtime live 1:1 + servicio :8081** (`e5415df`, 2026-07-10,
+  docs 37/38/51): el motor consume el bus ZeroMQ del media-plane con corrida
+  1:1 (ADR-0007, cierra por `run_finished`; paridad replay<->stream verificada),
+  servicio FastAPI `eovrt-control serve` (ADR-0008), instrumentacion
+  `t_capture->alert` con estados de aplicabilidad (ADR-0006), pattern set
+  oficial `cr01_cr02_v2` (CR-01 high 4000 ms / CR-02 medium 7000 ms, scene,
+  sin cooldown ADR-0011, sin memoria de cobertura ADR-0012) y publisher de
+  alertas `control.alert.v1` (apagado por default; insumo del spec 45).
+- **evaluate-alerts v2** (`4a504b2` + `853f690` + `b3c6cc8`, doc 52 y doc 58):
+  matching por ventana en ms a nivel episodio (`re_alerts` no son FP,
+  ADR-0011), estados de aplicabilidad (ADR-0006), SDR + TTFD + fuente unica de
+  umbrales (spec 43 seccion 10), y el cierre A1-A5: censura por
+  dimensionamiento del clip (`metric_censored`), FAR/hora y **matching
+  bipartito optimo** (salda la deuda A del doc 52 — el greedy podia deflacionar
+  recall en P8). Cinco metricas: precision, recall, TTFD, SDR, FAR/hora.
+- **Servicio ampliado**: progreso parcial de patrones y lookup por
+  `media_run_id` (`5a85d45`), `DELETE /api/runs/{id}` (`a53e95e`), y snapshot
+  de patrones activos en `/runs/current` — expuestos por HTTP en vivo y
+  persistidos en la traza de la corrida (`5fcea11`; reporte suelto en
+  `docs/reportes/2026-07-25-patterns-live-endpoint.md`, sin integrar).
+- **Pattern set v1 deprecado**: la corrida live usa v2 (`ef001ff`, hallazgo
+  F-DR9: con v1 —timing por frames— los episodios de `derive_clip_gt` nunca
+  confirman y aparecen falsos `missed`). Hoy (2026-07-29, **sin commitear**):
+  `cr01_cr02_v1.yaml` marcado DEPRECADO en el propio YAML (solo smoke/tests) y
+  `replay_dbe_cr01_cr02.yaml` apuntado a v2.
+- **ADRs materializados** (hoy, 2026-07-29): `docs/decisions/ADR-0006..0013`
+  reconstruidos de las fuentes escritas del proyecto (repo `docs`:
+  `decisiones/`, specs 41/42, operacion 33/34/37/38/51/52). Desde 0006 la
+  numeracion local adopta la serie del proyecto, que es la que cita el codigo
+  (nota de serie en ADR-0006). No se materializo un ADR-0005 local: el adr-005
+  del proyecto (distribucion MQTT) pertenece al modulo de distribucion, aun no
+  construido.
+
+## Pendiente inmediato (2026-07-29)
+
+- Revisar los ADR-0006..0013 recien materializados: son borradores
+  reconstruidos a posteriori de los docs del proyecto; validar contra la
+  memoria del decisor antes de darlos por definitivos.
+- Versionar el informe de resultados v2 (el reporte
+  `docs/reportes/2026-07-25-patterns-live-endpoint.md` esta suelto/untracked).
+- Commitear la deprecacion de v1 (cambios de hoy en `configs/patterns/
+  cr01_cr02_v1.yaml`, `configs/replay_dbe_cr01_cr02.yaml`, `tests/test_config.py`)
+  — decision del usuario.
+- Merge de `feature/control-service` a `main` — pendiente del usuario (`main`
+  esta desactualizado).
+- Tramo evaluacion (fuera de este repo, pero lo destraba): pasada humana del GT
+  de video (CVAT) y corridas del banco.
+
+---
+
+*Lo que sigue es historico (hasta 2026-07-02). Su "Pendiente inmediato" quedo
+superado por lo de arriba: replay con artefactos reales, fixtures de clips,
+evaluacion temporal extendida y el contrato live ya existen.*
+
 ## 2026-06-09
 
 - Se definio el alcance inicial del plano de control.
@@ -35,7 +101,7 @@
 - Motor de patrones: asociacion EPP<->persona 1:1 por cercania, expiracion opcional de sujetos ausentes y cooldown opcional de re-alerta. Nuevo warning cuando la persistencia temporal no puede operar por falta de ids estables.
 - Se agregaron pruebas de las tres mejoras del motor y de la carga de tuning; el fixture sintetico sigue dando F1 = 1.0.
 
-## Pendiente inmediato
+## Pendiente inmediato (historico, congelado 2026-07-02 — superado, ver arriba)
 
 - Ejecutar replay con artefactos reales del plano de medios.
 - Generar fixtures a partir de clips reales seleccionados para evaluacion de pipeline.

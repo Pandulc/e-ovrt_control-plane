@@ -1,6 +1,16 @@
+# =============================================================================
+# DEPRECADO — solo para smoke tests y tests unitarios de mecánica por frames
+# (timing por `confirm_after_frames`, sin `granularity: scene`).
+# NUNCA usar para evaluación cuantitativa ni corridas de resultados: produce
+# falsos `missed` contra GT derivado con umbrales en ms — `derive_clip_gt`
+# asume CR-01 4000ms / CR-02 7000ms y este set nunca confirma con esa
+# semántica (hallazgo F-DR9, dry-run 2026-07-22).
+# El pattern set VIGENTE es `cr01_cr02_v2.yaml` (CR-01 high 4000ms,
+# CR-02 medium 7000ms, granularity scene).
+# =============================================================================
 pattern_set:
   id: cr01_cr02_v1
-  description: "Patrones iniciales DBE para condiciones CR-01 y CR-02."
+  description: "DEPRECADO (F-DR9): set inicial DBE, timing por frames. Solo smoke/tests; usar cr01_cr02_v2 para resultados."
   patterns:
     - id: CR-01
       name: person_without_helmet
