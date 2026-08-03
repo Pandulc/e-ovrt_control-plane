@@ -274,14 +274,71 @@ def _episode_key_matches(alert: AlertEvent, episode: ClipEpisodeV2) -> bool:
     return alert.source_id == episode.source_id
 
 
+def _gt_boundary_tolerance_ms(ground_truth: ClipGroundTruthV2) -> float:
+    """`annotation.start_end_tolerance_ms` del GT (0.0 si no lo declara).
+
+    F1 (2026-08-03): el GT declara la incertidumbre de sus propios bordes de
+    episodio —`derive_clip_gt` escribe 500 ms— y el evaluador la ignoraba. Como
+    la ventana de matching se deriva de `episode.start_ms`, hereda esa
+    incertidumbre. Sin aplicarla, una alerta correcta que cae unos ms antes del
+    borde inferior se cuenta `missed` Y `unexpected` a la vez (doble castigo);
+    medido en el banco del rodaje con desvios de -67, -100 y -433 ms, los tres
+    dentro de la tolerancia declarada. Default 0.0: un GT historico que no
+    declara tolerancia conserva el borde duro (retrocompatible).
+    """
+    annotation = ground_truth.annotation or {}
+    raw = annotation.get("start_end_tolerance_ms")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _alert_in_episode_window(
-    alert: AlertEvent, episode: ClipEpisodeV2, window: MatchingWindow | EffectiveMatchingWindow
+    alert: AlertEvent,
+    episode: ClipEpisodeV2,
+    window: MatchingWindow | EffectiveMatchingWindow,
+    tolerance_ms: float = 0.0,
 ) -> bool:
     if alert.timestamp_ms is None:
         return False
-    lo = episode.start_ms + window.persistencia_min_ms
-    hi = episode.start_ms + window.t_alert_max_ms
+    # La tolerancia ensancha AMBOS bordes porque los dos se derivan de
+    # `episode.start_ms`: si el inicio real puede estar +-tol, la ventana entera
+    # se corre +-tol.
+    lo = episode.start_ms + window.persistencia_min_ms - tolerance_ms
+    hi = episode.start_ms + window.t_alert_max_ms + tolerance_ms
     return lo <= alert.timestamp_ms <= hi
+
+
+def _alert_repeats_matched_episode(
+    alert: AlertEvent,
+    matched_spans: list[tuple[ClipEpisodeV2, float]],
+    tolerance_ms: float = 0.0,
+) -> bool:
+    """La alerta REPITE la confirmacion de un episodio ya matcheado, con la
+    infraccion todavia activa.
+
+    F2 (2026-08-03, ADR-011): el motor emite en cada confirmacion y "el evaluador
+    cuenta `re_alerts`, no los penaliza como FP". Pero las re_alerts solo se
+    detectaban DENTRO de la ventana de matching; una segunda alerta POSTERIOR a
+    la ventana, con el episodio todavia abierto, caia a
+    `outside_all_episode_windows` y deflacionaba precision. Medido en el banco
+    del rodaje: `a_p1_c08` matchea a 7300 ms y re-confirma a 14667 ms con el
+    episodio activo hasta 19933 ms — no hay nada falso en esa alerta.
+
+    Se exige que la alerta sea POSTERIOR al match. Una alerta ANTERIOR al borde
+    inferior de la ventana es *prematura* (el motor confirmo sin haber acumulado
+    la persistencia), no una repeticion: esa sigue siendo FP, y los gates de
+    `test_evaluate_alerts_v2_gate` / `test_temporal_evaluation` lo fijan.
+    """
+    if alert.timestamp_ms is None:
+        return False
+    return any(
+        episode.condition_id == alert.condition_id
+        and _episode_key_matches(alert, episode)
+        and matched_ms < alert.timestamp_ms <= episode.end_ms + tolerance_ms
+        for episode, matched_ms in matched_spans
+    )
 
 
 class AlertMatch(BaseModel):
@@ -991,6 +1048,9 @@ def _evaluate_v2(
     missed_count = 0
     censored: list[CensoredEpisode] = []
     latencies: list[float] = []
+    # F1: la ventana de matching hereda la incertidumbre que el GT declara sobre
+    # sus propios bordes de episodio (`annotation.start_end_tolerance_ms`).
+    tolerance_ms = _gt_boundary_tolerance_ms(ground_truth)
 
     # A4 (doc 52 deuda A): matching BIPARTITO episodio<->alerta, no greedy. El
     # greedy asignaba a cada episodio, en orden, su alerta candidata mas
@@ -1044,7 +1104,7 @@ def _evaluate_v2(
                     for alert in alerts
                     if alert.condition_id == episode.condition_id
                     and _episode_key_matches(alert, episode)
-                    and _alert_in_episode_window(alert, episode, window)
+                    and _alert_in_episode_window(alert, episode, window, tolerance_ms)
                 ),
                 key=lambda alert: alert.timestamp_ms,
             )
@@ -1081,11 +1141,16 @@ def _evaluate_v2(
     re_alert_ids = candidate_alert_ids - matched_alert_ids
     re_alerts_count = len(re_alert_ids)
 
+    # F2: (episodio, ts del match) de los episodios efectivamente confirmados —
+    # base para distinguir una re_alert (posterior al match, infraccion activa)
+    # de una alerta prematura (anterior, sin persistencia acumulada = FP).
+    matched_spans: list[tuple[ClipEpisodeV2, float]] = []
     for slot, (_index, episode, window) in enumerate(episodes_with_window):
         matched_alert = slot_to_alert.get(slot)
         if matched_alert is not None:
             matched_count += 1
             latencies.append(matched_alert.timestamp_ms - episode.start_ms)
+            matched_spans.append((episode, matched_alert.timestamp_ms))
             continue
         # A2: un episodio sin match cuyo clip no cubre la ventana completa no es
         # concluyente -> se censura (fuera del denominador de recall) en vez de
@@ -1131,6 +1196,14 @@ def _evaluate_v2(
         if in_sub_threshold:
             sub_threshold_count += 1
             continue
+        # F2 (ADR-011): la alerta cayo fuera de toda VENTANA de matching pero la
+        # infraccion de su condicion estaba ACTIVA en ese instante. Es una
+        # re_alert (el motor emite en cada confirmacion; suprimir la re-
+        # notificacion es politica de distribucion), no una falsa alarma: en ese
+        # momento habia una violacion real. Contarla FP deflacionaba precision.
+        if _alert_repeats_matched_episode(alert, matched_spans, tolerance_ms):
+            re_alerts_count += 1
+            continue
         unexpected.append(
             UnexpectedAlert(
                 alert_id=alert.alert_id,
@@ -1160,10 +1233,27 @@ def _evaluate_v2(
     # hay recall evaluable -> `not_applicable` con causa.
     applicability_state = "computed"
     applicability_cause = None
+    if evaluable_episodes == 0:
+        # Sin episodios evaluables el denominador de recall es 0: no hay recall ni
+        # F1 que reportar. Dos causas distintas, ambas `not_applicable` para que
+        # ninguna agregacion promedie un 0.0 que en realidad es "indefinido".
+        # En un clip NEGATIVO ese 0.0 es especialmente enganoso: puntuaria como
+        # FRACASO TOTAL un comportamiento PERFECTO (la plataforma no alerto sobre
+        # una escena en cumplimiento, que es exactamente lo que debia hacer). Con
+        # 4 de los 34 clips del banco del rodaje negativos, promediar F1 por clip
+        # subestimaria la plataforma.
+        applicability_state = "not_applicable"
+        applicability_cause = (
+            "all_episodes_metric_censored" if censored else "negative_clip_no_episodes"
+        )
+        if not censored:
+            warnings.append(
+                "clip negativo (0 episodios en el GT): precision/recall/F1 no son "
+                "evaluables (denominador 0) y NO deben promediarse. Lo que si es "
+                f"dato real: {unexpected_count} falso(s) positivo(s) y far_per_hour "
+                "— este clip es control de falsos positivos, no de recall."
+            )
     if censored:
-        if evaluable_episodes == 0:
-            applicability_state = "not_applicable"
-            applicability_cause = "all_episodes_metric_censored"
         warnings.append(
             f"metric_censored: {len(censored)} de {len(ground_truth.episodes)} episodios "
             "quedan fuera del denominador de recall/t_alert por clip demasiado corto "
