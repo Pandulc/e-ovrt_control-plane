@@ -28,6 +28,9 @@ class PatternEvaluationResult:
     observed_subject_keys: set[str]
     subjects_observed: int = 0
     degradation_causes: set[str] = field(default_factory=set)
+    # Diagnostico de direct_evidence (spec 41 §6.1): hits directos descartados por
+    # el gating por persona. spatial_absence no lo usa (queda en 0).
+    ungated_direct_hits: int = 0
 
 
 def _normalize_label(value: str | None) -> str:

@@ -64,10 +64,51 @@ class PatternRegionConfig(BaseModel):
     full_height_aspect_ratio: float | None = None
 
 
+class DirectEvidenceClassConfig(BaseModel):
+    """Una clase de evidencia DIRECTA aceptada por el patron (spec 41 §6.1).
+
+    `prompt_id` matchea contra el prompt_id o el label de la deteccion. El gating
+    por persona (doc 12 §4.2) depende de la forma de la deteccion:
+      - `person_iou`: frases persona-centricas ("person without hard hat") — la caja
+        ES una persona, se gatea por IoU contra una persona detectada.
+      - `region_center`: detecciones de parte (`bare_head`) — caja chica, se gatea
+        por centro dentro de la region del patron sobre la persona.
+    """
+
+    prompt_id: str
+    min_confidence: float = 0.25
+    match: Literal["person_iou", "region_center"] = "person_iou"
+    iou_threshold: float = 0.5
+
+
 class PatternEvidenceConfig(BaseModel):
     min_subject_confidence: float = 0.35
     min_absent_class_confidence: float = 0.25
     min_subject_area_px: float = 400.0
+    # Estrategia de evidencia del patron (spec 41 §6.2, ADR-001/doc 12 §4):
+    #   eind    — ausencia espacial (spatial_absence). Default: los pattern sets
+    #             existentes no cambian.
+    #   edir    — deteccion directa de la condicion (direct_evidence).
+    #   hyb_or  — union: evidencia si cualquiera de las dos la aporta.
+    #   hyb_and — corroboracion (factor de ventana): tramo de fusiones, aun no
+    #             implementada — se rechaza en validacion para que no falle en
+    #             silencio como un eind.
+    strategy: Literal["eind", "edir", "hyb_or", "hyb_and"] = "eind"
+    direct: list[DirectEvidenceClassConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_strategy(self) -> "PatternEvidenceConfig":
+        if self.strategy in ("edir", "hyb_or", "hyb_and") and not self.direct:
+            raise ValueError(
+                f"strategy '{self.strategy}' requiere al menos una clase en 'direct' "
+                "(spec 41 §6.1: lista de prompt_ids E-DIR aceptados)"
+            )
+        if self.strategy == "hyb_and":
+            raise ValueError(
+                "strategy 'hyb_and' (corroboracion con factor de ventana) llega con el "
+                "tramo de fusiones de la Fase 2 — spec 41 §6.2; usar eind/edir/hyb_or"
+            )
+        return self
 
 
 class PatternTimingConfig(BaseModel):

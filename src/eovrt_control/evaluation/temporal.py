@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from eovrt_control.config import PatternDefinition, load_patterns_file
 from eovrt_control.contracts.alerts import AlertEvent
 from eovrt_control.contracts.media import DetectionEvent
-from eovrt_control.engine.evaluators.spatial_absence import evaluate_spatial_absence
+from eovrt_control.engine.evaluators import evaluate_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -535,12 +535,14 @@ def _positive_flags_for_source(
     events_sorted: list[DetectionEvent], pattern: PatternDefinition
 ) -> list[bool]:
     """Criterio de 'deteccion positiva valida' (item 2 del audit fix): reusa el
-    evaluador real del motor (`evaluate_spatial_absence`). Un evento es
-    positivo para la condicion de `pattern` si el evaluador produce >=1
-    evidencia (sujeto person que pasa los gates de confianza/area y carece de
-    la clase requerida) -- NO se inventa una tercera fuente de verdad."""
+    evaluador real del motor VIA EL DESPACHO POR ESTRATEGIA (`evaluate_pattern`).
+    Un evento es positivo para la condicion de `pattern` si SU evaluador (eind/
+    edir/hyb_or segun `evidence.strategy`) produce >=1 evidencia -- NO se inventa
+    una tercera fuente de verdad. Con el evaluador hardcodeado a spatial_absence,
+    un run E-DIR (caption sin clase EPP) puntuaba SDR ~1.0 con cero alertas: toda
+    persona contaba como 'ausencia' (medido en el humo de D1, doc 85)."""
 
-    return [bool(evaluate_spatial_absence(event, pattern).evidences) for event in events_sorted]
+    return [bool(evaluate_pattern(event, pattern).evidences) for event in events_sorted]
 
 
 def _ttfd_for_episode(

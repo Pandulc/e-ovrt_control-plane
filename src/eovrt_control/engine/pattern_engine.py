@@ -10,7 +10,7 @@ from eovrt_control.config import PatternDefinition
 from eovrt_control.contracts.alerts import AlertEvent
 from eovrt_control.contracts.media import DetectionEvent
 from eovrt_control.contracts.pattern import PatternEvidence, PatternProgress, PatternStateChanged
-from eovrt_control.engine.evaluators.spatial_absence import evaluate_spatial_absence
+from eovrt_control.engine.evaluators import evaluate_pattern
 
 
 @dataclass
@@ -57,6 +57,9 @@ class PatternEngineResult:
     subjects_count: int
     degradation_causes: set[str] = field(default_factory=set)
     progress: list["PatternProgress"] = field(default_factory=list)
+    # Diagnostico direct_evidence (spec 41 §6.1): hits directos descartados por el
+    # gating por persona en esta unidad.
+    ungated_direct_hits: int = 0
 
 
 class PatternEngine:
@@ -138,9 +141,13 @@ class PatternEngine:
         subjects_count = 0
         degradation_causes: set[str] = set()
         progress_records: list[PatternProgress] = []
+        ungated_direct_hits = 0
 
         for pattern in self.patterns:
-            result = evaluate_spatial_absence(event, pattern)
+            # Despacho por estrategia (spec 41 §6.2): eind/edir/hyb_or segun la
+            # config del patron. La logica temporal de abajo es comun a todas.
+            result = evaluate_pattern(event, pattern)
+            ungated_direct_hits += result.ungated_direct_hits
             evidence_by_subject = {evidence.subject_key: evidence for evidence in result.evidences}
             evidences_count += len(result.evidences)
             subjects_count += result.subjects_observed
@@ -203,6 +210,7 @@ class PatternEngine:
             subjects_count=subjects_count,
             degradation_causes=degradation_causes,
             progress=progress_records,
+            ungated_direct_hits=ungated_direct_hits,
         )
 
     def _advance_hit(

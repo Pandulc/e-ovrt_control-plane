@@ -1,0 +1,78 @@
+pattern_set:
+  id: cr01_cr02_edir_v1
+  description: >
+    Pattern set del carril E-DIR para la Fase 2 de D1 (nucleo/04 §7 Fase 2,
+    spec 41 SS6): la evidencia es una DETECCION DIRECTA de la condicion
+    (strategy: edir, evaluador direct_evidence con gating por persona), no la
+    ausencia espacial. UNICA variable respecto de cr01_cr02_v2: la estrategia de
+    evidencia — mismos timings (CR-01 4000 ms high / CR-02 7000 ms medium), misma
+    granularidad scene, mismas regiones y umbrales de sujeto.
+    Variantes elegidas por F1 de CALIBRACION (mitad A) del estrato bench_obra
+    (el mas cercano al dominio del rodaje) en la Fase 1 (doc 83 del repo docs):
+    CR-01 = cr01_spec, CR-02 = cr02_obs.
+    UMBRALES: min_confidence 0.25 = el default de evidencia de la plataforma
+    (el mismo min_absent_class_confidence que cr01_cr02_v2 usa para E-IND) —
+    trato simetrico entre estrategias. Los umbrales calibrados en la mitad A del
+    bench de IMAGENES (0.70/0.40) NO transfieren a video: en el humo de D1
+    (a_p1_c09) cr01_spec disparo en 266/722 frames con confianza MAXIMA 0.37
+    (el dominio y la composicion del caption corren las confidencias) — con 0.70
+    la campana entera daria cero por construccion (doc 85). No se calibra sobre
+    los clips: son el conjunto de test.
+    required_absent_class se conserva como la clase EPP conceptualmente violada
+    (la leen los sinks aguas abajo); el evaluador edir no la consume.
+  patterns:
+    - id: CR-01
+      name: person_without_helmet_direct
+      description: "Evidencia directa de persona sin casco (frase E-DIR, eje specificity)."
+      enabled: true
+      condition_id: CR-01
+      severity: high
+      subject_class: person
+      required_absent_class: helmet
+      granularity: scene
+      region:
+        type: upper_body
+        y_min_ratio: 0.0
+        y_max_ratio: 0.45
+        x_margin_ratio: 0.12
+      evidence:
+        strategy: edir
+        min_subject_confidence: 0.35
+        min_subject_area_px: 400.0
+        direct:
+          - prompt_id: cr01_spec        # "construction worker without safety helmet"
+            min_confidence: 0.25        # default de evidencia de la plataforma (ver description)
+            match: person_iou
+      timing:
+        confirm_after_frames: 1
+        resolve_after_frames: 1
+        confirm_after_ms: 4000.0
+        resolve_after_ms: 2000.0
+
+    - id: CR-02
+      name: person_without_vest_direct
+      description: "Evidencia directa de persona sin chaleco (frase E-DIR, eje observable_state)."
+      enabled: true
+      condition_id: CR-02
+      severity: medium
+      subject_class: person
+      required_absent_class: vest
+      granularity: scene
+      region:
+        type: torso
+        y_min_ratio: 0.25
+        y_max_ratio: 0.85
+        x_margin_ratio: 0.08
+      evidence:
+        strategy: edir
+        min_subject_confidence: 0.35
+        min_subject_area_px: 400.0
+        direct:
+          - prompt_id: cr02_obs         # "person without bright colored safety clothing"
+            min_confidence: 0.25        # default de evidencia de la plataforma (ver description)
+            match: person_iou
+      timing:
+        confirm_after_frames: 1
+        resolve_after_frames: 1
+        confirm_after_ms: 7000.0
+        resolve_after_ms: 3000.0
