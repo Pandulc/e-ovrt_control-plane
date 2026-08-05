@@ -13,16 +13,27 @@ from eovrt_control.contracts.metrics import RunSummary
 from eovrt_control.runtime.core import PreparedRun, RunProgress, execute_over_source, prepare_run
 from eovrt_control.sources.base import MediaEventSource
 from eovrt_control.sources.bus import BusSource
+from eovrt_control.sources.tracking import maybe_track
 
 
-def build_bus_source(config: ReplayConfig, control_run_id: str) -> BusSource:
+def build_bus_source(config: ReplayConfig, control_run_id: str) -> MediaEventSource:
     """Construir el BusSource ES suscribirse (spec 40 SS3.2 regla 1).
 
     El orquestador debe llamarlo ANTES de disparar el run en el media-plane.
+
+    Con `input.track_persons` la fuente queda decorada por `TrackingSource`: la
+    identidad por sujeto (G1) tambien esta disponible en EBE/live, sin que el
+    media-plane tenga que emitir `track_id`. La suscripcion ocurre igual al construir
+    el BusSource interno, asi que la regla 1 se conserva.
     """
     if config.input.bus is None:
         raise ValueError("input.bus no esta configurado")
     bus = config.input.bus
+    return maybe_track(_build_bus_source(config, control_run_id, bus),
+                       config.input.track_persons)
+
+
+def _build_bus_source(config: ReplayConfig, control_run_id: str, bus) -> BusSource:
     return BusSource(
         endpoint=bus.endpoint,
         control_run_id=control_run_id,

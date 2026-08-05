@@ -1,0 +1,72 @@
+pattern_set:
+  id: cr01_cr02_v2_subject
+  description: >
+    `cr01_cr02_v2` con `granularity: subject` (G1). UNICA variable respecto del pattern
+    set oficial: la granularidad. Mismos timings (CR-01 4000 ms high / CR-02 7000 ms
+    medium), mismas regiones, mismos umbrales, misma estrategia de evidencia (eind).
+
+    Por que (F-81.2a, doc 81): bajo escena el motor acumula "alguien sin casco", pero
+    el GT exige que UN SUJETO sostenga la violacion 4 s (regla C1 de `derive_clip_gt`).
+    En multitud (P7) los sujetos se relevan: la escena nunca deja de estar en
+    evidencia aunque ninguna persona individual sostenga el umbral, y la alerta cae
+    fuera de la ventana del episodio. Es la asimetria C1/ADR-012 medida en datos
+    reales — el costo de operar sin identidad. Bajo `subject` la semantica del motor
+    coincide con la del GT.
+
+    ALIMENTACION: requiere `track_id` en las detecciones de persona. Se produce
+    post-hoc sobre las corridas YA HECHAS con
+    `python -m eovrt_control.tools.track_detections` — asi el contraste G0-vs-G1 es de
+    variable unica (mismas cajas, bit a bit) y no necesita re-inferir.
+
+    ADR-002: G0 (escena) sigue siendo el nucleo; `subject` es demostrativa. Si un
+    evento llega sin `track_id`, el motor degrada a clave de escena con causa
+    `no_track_id` en lugar de fallar — por eso el productor verifica que ninguna
+    persona quede sin identidad: si no, este pattern set mediria G0 en silencio.
+  patterns:
+    - id: CR-01
+      name: person_without_helmet
+      description: "Persona observada sin evidencia asociada de casco (por sujeto)."
+      enabled: true
+      condition_id: CR-01
+      severity: high
+      subject_class: person
+      required_absent_class: helmet
+      granularity: subject
+      region:
+        type: upper_body
+        y_min_ratio: 0.0
+        y_max_ratio: 0.45
+        x_margin_ratio: 0.12
+      evidence:
+        min_subject_confidence: 0.35
+        min_absent_class_confidence: 0.25
+        min_subject_area_px: 400.0
+      timing:
+        confirm_after_frames: 1
+        resolve_after_frames: 1
+        confirm_after_ms: 4000.0
+        resolve_after_ms: 2000.0
+
+    - id: CR-02
+      name: person_without_vest
+      description: "Persona observada sin evidencia asociada de chaleco (por sujeto)."
+      enabled: true
+      condition_id: CR-02
+      severity: medium
+      subject_class: person
+      required_absent_class: vest
+      granularity: subject
+      region:
+        type: torso
+        y_min_ratio: 0.25
+        y_max_ratio: 0.85
+        x_margin_ratio: 0.08
+      evidence:
+        min_subject_confidence: 0.35
+        min_absent_class_confidence: 0.25
+        min_subject_area_px: 400.0
+      timing:
+        confirm_after_frames: 1
+        resolve_after_frames: 1
+        confirm_after_ms: 7000.0
+        resolve_after_ms: 3000.0

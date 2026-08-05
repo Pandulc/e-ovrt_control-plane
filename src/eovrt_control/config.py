@@ -43,6 +43,12 @@ class InputSection(BaseModel):
     type: Literal["media_jsonl", "bus"] = "media_jsonl"
     path: str | None = None
     bus: BusInputSection | None = None
+    # Identidad por sujeto producida por el control-plane (doc 89 / adenda ADR-002):
+    # asigna `track_id` a las detecciones de persona segun llegan, para que los
+    # patrones con `granularity: subject` tengan a que colgar el estado. Opt-in: sin
+    # esto ninguna corrida existente cambia de comportamiento. Aplica a `media_jsonl`
+    # (DBE) y a `bus` (EBE live) por igual — decora la FUENTE, no el productor.
+    track_persons: bool = False
 
     @model_validator(mode="after")
     def validate_shape(self) -> "InputSection":

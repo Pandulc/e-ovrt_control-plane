@@ -8,6 +8,7 @@ from eovrt_control.config import ReplayConfig, load_replay_config
 from eovrt_control.contracts.metrics import RunSummary
 from eovrt_control.runtime.core import PreparedRun, RunProgress, execute_over_source, prepare_run
 from eovrt_control.sources.jsonl import JsonlSource
+from eovrt_control.sources.tracking import maybe_track
 
 
 def run_replay_from_config(
@@ -22,7 +23,10 @@ def run_replay_from_config(
     prepared = prepared or prepare_run(config)
     # `JsonlSource` emite el error de archivo inexistente como item de fuente;
     # el core lo escribe en errors.jsonl sin contarlo como unidad fallida.
-    source = JsonlSource(config.resolve_path(config.input.path), prepared.control_run_id)
+    source = maybe_track(
+        JsonlSource(config.resolve_path(config.input.path), prepared.control_run_id),
+        config.input.track_persons,
+    )
     return execute_over_source(
         config=config,
         source=source,

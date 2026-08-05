@@ -1,0 +1,60 @@
+pattern_set:
+  id: cr01_bare_head_v1
+  description: >
+    CR-01 con `bare_head` como EVIDENCIA DIRECTA de la violacion (strategy: edir,
+    evaluador direct_evidence con gating `region_center`), en vez de la ausencia
+    espacial de `helmet`.
+
+    Por que existe (F-84.5, doc 84): la "especialidad CR-01" de `gdino-base-560`
+    (recall 0.599 vs 0.308 de tiny, doc 64) se midio DETECTANDO `bare_head`
+    (evaluate_bench.evaluate_cr01, estrategia E1), y el prompt set desplegado
+    `cr01_cr02_v2_short` NO incluye esa clase — asi que la campaña T2 nunca
+    ejercito la capacidad por la que base es especialista. Es la mayor separacion
+    medida entre los dos modelos y la unica palanca de percepcion que quedaba
+    sin probar a Nivel B.
+
+    Solo CR-01: `bare_head` no dice nada sobre el chaleco.
+
+    ALIMENTACION: corridas con el prompt set `cr01_cr02_bench_v2` (4 clases:
+    person/helmet/vest/bare_head) — el MISMO caption en el que se midio la
+    especialidad. Usar un caption distinto (p.ej. person+bare_head solo) cambiaria
+    el regimen de la deteccion y repetiria el error F-83.1: el vocabulario es parte
+    de la inferencia.
+
+    `match: region_center` porque `bare_head` es una deteccion de PARTE (caja chica
+    de cabeza), no persona-centrica: se gatea por centro dentro de la region
+    upper_body del sujeto, igual que el matching por variante de la Fase 1 y que
+    `head_region` del person_gt. Con `person_iou` no gatearia nunca.
+
+    Umbral 0.25 = el mismo default de plataforma que usan cr01_cr02_edir_v1 y
+    cr01_cr02_hyb_or_v1 (trato simetrico entre estrategias). Timings, region,
+    granularidad y umbral de sujeto identicos a cr01_cr02_v2: la UNICA variable es
+    de donde sale la evidencia.
+  patterns:
+    - id: CR-01
+      name: person_without_helmet_bare_head
+      description: "Persona con evidencia directa de cabeza descubierta (bare_head)."
+      enabled: true
+      condition_id: CR-01
+      severity: high
+      subject_class: person
+      required_absent_class: helmet
+      granularity: scene
+      region:
+        type: upper_body
+        y_min_ratio: 0.0
+        y_max_ratio: 0.45
+        x_margin_ratio: 0.12
+      evidence:
+        strategy: edir
+        min_subject_confidence: 0.35
+        min_subject_area_px: 400.0
+        direct:
+          - prompt_id: bare_head
+            min_confidence: 0.25
+            match: region_center
+      timing:
+        confirm_after_frames: 1
+        resolve_after_frames: 1
+        confirm_after_ms: 4000.0
+        resolve_after_ms: 2000.0

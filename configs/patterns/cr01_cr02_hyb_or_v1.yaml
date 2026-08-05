@@ -1,0 +1,80 @@
+pattern_set:
+  id: cr01_cr02_hyb_or_v1
+  description: >
+    Pattern set de la fusion E-HYB-or para la Fase 2 de D1 (doc 12 §4.3, spec 41 SS6.2):
+    la unidad visual aporta evidencia si la aporta `spatial_absence` (E-IND) O
+    `direct_evidence` (E-DIR gateada por persona). Prediccion pre-registrada: sube
+    recall de alertas, baja precision; la histeresis temporal filtra parte del ruido
+    extra. F-85.5 la ubica: la ganancia esperada esta en el pre-roll (P9), no en general.
+
+    SE ALIMENTA DE UN STREAM FUSIONADO DUAL-RUN (doc 12 §4.1), no de una corrida con
+    vocabulario union: las detecciones de E-IND vienen de la corrida T1 y los hits
+    directos de la corrida D1, bit a bit los mismos. Producirlo:
+      datasets/scripts/bench/merge_dual_run.py --eind <T1>/detections.jsonl \
+        --edir <D1>/detections.jsonl --out <fusion>.jsonl
+    Un pase unico con las 5 clases daria señales DISTINTAS de las individuales
+    (medido: `person` con la misma frase da 729 vs 731 cajas segun el caption) y la
+    comparacion dejaria de ser de variable unica.
+
+    UNICA variable respecto de cr01_cr02_v2: la estrategia de evidencia. Mismos
+    timings (CR-01 4000 ms high / CR-02 7000 ms medium), regiones, granularidad y
+    umbrales de sujeto. El umbral de la evidencia directa es 0.25, el mismo default
+    de plataforma que usa cr01_cr02_edir_v1 (trato simetrico entre estrategias).
+  patterns:
+    - id: CR-01
+      name: person_without_helmet_hyb_or
+      description: "Ausencia espacial de casco O evidencia directa de persona sin casco."
+      enabled: true
+      condition_id: CR-01
+      severity: high
+      subject_class: person
+      required_absent_class: helmet
+      granularity: scene
+      region:
+        type: upper_body
+        y_min_ratio: 0.0
+        y_max_ratio: 0.45
+        x_margin_ratio: 0.12
+      evidence:
+        strategy: hyb_or
+        min_subject_confidence: 0.35
+        min_absent_class_confidence: 0.25
+        min_subject_area_px: 400.0
+        direct:
+          - prompt_id: cr01_spec        # "construction worker without safety helmet"
+            min_confidence: 0.25
+            match: person_iou
+      timing:
+        confirm_after_frames: 1
+        resolve_after_frames: 1
+        confirm_after_ms: 4000.0
+        resolve_after_ms: 2000.0
+
+    - id: CR-02
+      name: person_without_vest_hyb_or
+      description: "Ausencia espacial de chaleco O evidencia directa de persona sin chaleco."
+      enabled: true
+      condition_id: CR-02
+      severity: medium
+      subject_class: person
+      required_absent_class: vest
+      granularity: scene
+      region:
+        type: torso
+        y_min_ratio: 0.25
+        y_max_ratio: 0.85
+        x_margin_ratio: 0.08
+      evidence:
+        strategy: hyb_or
+        min_subject_confidence: 0.35
+        min_absent_class_confidence: 0.25
+        min_subject_area_px: 400.0
+        direct:
+          - prompt_id: cr02_obs         # "person without bright colored safety clothing"
+            min_confidence: 0.25
+            match: person_iou
+      timing:
+        confirm_after_frames: 1
+        resolve_after_frames: 1
+        confirm_after_ms: 7000.0
+        resolve_after_ms: 3000.0

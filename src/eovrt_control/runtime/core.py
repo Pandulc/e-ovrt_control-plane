@@ -80,6 +80,17 @@ def prepare_run(config: ReplayConfig) -> PreparedRun:
         raise ValueError("La configuracion no tiene patterns_file resuelto")
     run_id = control_run_id(config)
     base_dir = config.resolve_path(config.outputs.base_dir)
+    # El id autogenerado tiene resolucion de SEGUNDOS: dos corridas del mismo nombre
+    # dentro del mismo segundo escribian en el MISMO directorio y la segunda pisaba
+    # los artefactos de la primera en silencio (visible recien con replays CPU-only
+    # sub-segundo). Se desambigua con sufijo; un run.id EXPLICITO no se toca — si el
+    # usuario fijo el id, la colision es un error suyo y pisar es el contrato.
+    if not config.run.id:
+        candidate, n = run_id, 2
+        while (base_dir / candidate).exists():
+            candidate = f"{run_id}-{n}"
+            n += 1
+        run_id = candidate
     artifacts = RunArtifacts(base_dir / run_id)
     artifacts.write_effective_config(config)
     return PreparedRun(

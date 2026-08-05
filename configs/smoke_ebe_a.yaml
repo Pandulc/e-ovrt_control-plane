@@ -1,0 +1,26 @@
+run:
+  scenario: EBE
+  name: smoke_ebe_a
+  description: "Humo EBE fase A — REGRESION del camino live con el pattern set desplegado"
+input:
+  type: bus
+  track_persons: false
+  bus:
+    endpoint: tcp://127.0.0.1:5557
+    topics:
+      - media.detection.v1.
+      - run.lifecycle.v1.
+    hwm: 1000
+    recv_timeout_ms: 1000
+    idle_timeout_s: 120
+    finish:
+      signal: run_lifecycle
+      poll_url: null
+      poll_interval_s: 5
+patterns:
+  file: patterns/cr01_cr02_v2.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+outputs:
+  base_dir: ../runs

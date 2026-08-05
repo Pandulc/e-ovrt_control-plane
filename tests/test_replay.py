@@ -294,3 +294,32 @@ def test_replay_summary_carries_experiment_id(tmp_path) -> None:
     summary = run_replay(config_path)
 
     assert summary.experiment_id == "exp-42"
+
+
+def test_dos_runs_con_el_mismo_nombre_en_el_mismo_segundo_no_comparten_directorio(tmp_path):
+    """El id es `nombre_timestamp` con resolucion de SEGUNDOS: dos corridas del mismo
+    nombre dentro del mismo segundo escribian en el MISMO directorio y la segunda
+    pisaba los artefactos de la primera en silencio (contaminacion cruzada — atrapada
+    verificando G1 a ritmo de replay-CPU, doc 90 D-90.3). Los runners de campaña lo
+    esquivaban por accidente (clip_id en el nombre); la plataforma no puede depender
+    de eso."""
+    from pathlib import Path
+
+    from eovrt_control.config import load_replay_config
+    from eovrt_control.runtime.core import prepare_run
+
+    patterns = Path("configs/patterns/cr01_cr02_v2.yaml").resolve()
+    src = tmp_path / "det.jsonl"
+    src.write_text("")
+    cfg_path = tmp_path / "replay.yaml"
+    cfg_path.write_text(
+        "run:\n  id: null\n  scenario: DBE\n  name: mismo_nombre\n"
+        f"input:\n  type: media_jsonl\n  path: {src}\n"
+        f"patterns:\n  file: {patterns}\n"
+        f"outputs:\n  base_dir: {tmp_path / 'cr'}\n"
+    )
+    primero = prepare_run(load_replay_config(cfg_path))
+    segundo = prepare_run(load_replay_config(cfg_path))
+    assert primero.control_run_id != segundo.control_run_id
+    assert primero.artifacts.run_dir != segundo.artifacts.run_dir
+    assert primero.artifacts.run_dir.exists() and segundo.artifacts.run_dir.exists()

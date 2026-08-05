@@ -1,0 +1,26 @@
+run:
+  scenario: EBE
+  name: smoke_ebe_b
+  description: "Humo EBE fase B — G1 EN VIVO (identidad por sujeto sobre el bus)"
+input:
+  type: bus
+  track_persons: true
+  bus:
+    endpoint: tcp://127.0.0.1:5557
+    topics:
+      - media.detection.v1.
+      - run.lifecycle.v1.
+    hwm: 1000
+    recv_timeout_ms: 1000
+    idle_timeout_s: 120
+    finish:
+      signal: run_lifecycle
+      poll_url: null
+      poll_interval_s: 5
+patterns:
+  file: patterns/cr01_cr02_v2_subject.yaml
+  active_ids:
+    - CR-01
+    - CR-02
+outputs:
+  base_dir: ../runs
