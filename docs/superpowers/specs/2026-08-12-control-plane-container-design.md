@@ -19,7 +19,7 @@ usuario no root y arranca:
 python -m uvicorn --factory eovrt_control.service.app:create_app --host 0.0.0.0 --port 8081
 ```
 
-Declara el puerto 8081, un healthcheck contra `/api/health` y
+Declara el puerto 8081, un healthcheck contra `/healthz` y
 `EOVRT_CONTROL_RUNS_DIR=/data/runs`. Configs, patterns, detections y runs se aportan mediante mounts;
 la imagen no contiene datasets, pesos ni resultados del workspace.
 
@@ -36,7 +36,7 @@ hermanos.
 
 - Build de la imagen con el contexto del repo.
 - Arranque con un volumen temporal para `/data/runs`.
-- `/api/health` responde correctamente.
+- `/healthz` y `/readyz` responden correctamente.
 - Suite y Ruff existentes siguen limpios bajo Python 3.11.
 - Si Docker no está disponible, se valida el Dockerfile estáticamente y se registra que el smoke de
   daemon quedó condicionado por el entorno, sin afirmar que fue ejecutado.
