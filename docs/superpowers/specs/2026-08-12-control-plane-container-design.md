@@ -4,6 +4,11 @@ Fecha: 2026-08-12
 Repo: `e-ovrt_control-plane`
 Motivo: cerrar B2 del relevamiento 114 sin cambiar la semántica del servicio.
 
+> **Estado: descartado el 2026-08-13.** La decisión operacional vigente mantiene
+> media-plane, control-plane y distribución como procesos del host. No se implementa
+> ni mantiene una imagen propia del control-plane. El contenido siguiente queda como
+> registro histórico del diseño evaluado, no como plan activo.
+
 ## 1. Alcance
 
 Agregar una imagen reproducible del FastAPI control-plane. No se cambia su API, runtime de patrones,
