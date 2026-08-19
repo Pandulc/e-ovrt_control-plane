@@ -1,10 +1,14 @@
 # Configs archivados
 
-Configs de corrida y pattern sets legacy/rotos, archivados el 2026-07-18. Ninguno es
-referenciado por `tests/` ni `src/` (verificado por grep antes de mover). Se conservan como
-registro histórico; para reusar uno, moverlo de vuelta a `configs/`.
+Configs de corrida y pattern sets legacy/rotos, archivados el 2026-07-18 (salvo indicación
+de fecha propia). Ninguno es referenciado por `tests/` ni `src/` (verificado por grep antes
+de mover). Se conservan como registro histórico; para reusar uno, moverlo de vuelta a
+`configs/`.
 
 ## Configs de corrida
+- `replay_cr01_cr02_v2.yaml` — archivado el **2026-08-19**: casi-duplicado de
+  `configs/replay_dbe_cr01_cr02.yaml` (mismo input, mismo pattern set v2, mismas salidas;
+  solo difieren `run.name`/`description`), cero referencias en `tests/` y `src/`.
 - `replay_hf_*.yaml` (detections/field/temporal/video_intel) — **rotos**: su fuente
   `../fixtures/hf_media/latest/detections.jsonl` no existe (los `hf_media/**` están
   gitignored a propósito, no viajan con el repo).
@@ -19,7 +23,8 @@ registro histórico; para reusar uno, moverlo de vuelta a `configs/`.
 - `patterns/cr01_cr02_v2_probe.yaml` — solo los `verify_*_g0_fresh` (archivados).
 
 ## Activos (NO archivados)
-`configs/`: `replay_cr01_cr02_v2` (oficial v2), `live_ebe_cr01_cr02` (live 1:1),
-`replay_dbe_cr01_cr02` + `replay_simulated_cr01_cr02_temporal` (usados por tests/reproducibles).
-`configs/patterns/`: `cr01_cr02_v2` (oficial), `cr01_cr02_v1` (16 refs en tests),
+`configs/`: `replay_dbe_cr01_cr02` (replay oficial sobre v2), `live_ebe_cr01_cr02` (live 1:1),
+`replay_simulated_cr01_cr02_temporal` (usado por tests/reproducible).
+`configs/patterns/`: `cr01_cr02_v2` (oficial), `cr01_cr02_v1` (deprecado F-DR9; 36 referencias
+en 13 archivos de tests — fixture load-bearing, no tocar),
 `cr01_cr02_temporal_eval` (tests + replay simulado).

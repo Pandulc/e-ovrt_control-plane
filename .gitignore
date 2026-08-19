@@ -16,3 +16,9 @@ models/yoloe/
 # Detecciones generadas por el generador (labs); no versionar salidas pesadas.
 fixtures/hf_media/**/detections*.jsonl
 
+# Tooling local y basura de SO
+.superpowers/
+.claude/
+.DS_Store
+*.log
+

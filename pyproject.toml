@@ -49,6 +49,9 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# tests/labs requiere el extra pesado [labs] (numpy/torch/cv2) y se corre explicito:
+#   pytest tests/labs
+addopts = "--ignore=tests/labs"
 markers = [
     "integration: usa ZeroMQ sobre localhost (spec 40 SS3.4, test de paridad)",
 ]

@@ -9,10 +9,10 @@ Esta primera iteracion baja deliberadamente la complejidad operacional para conc
 - Entrada offline DBE desde `detections.jsonl` del plano de medios.
 - Patrones CR-01 y CR-02 sobre evidencia `person`, `helmet` y `vest`.
 - Persistencia append-only en JSONL, sin base de datos robusta.
-- Estado temporal simple por sujeto observado, con persistencia por `timestamp_ms` y fallback por frames.
+- Estado temporal simple con persistencia por `timestamp_ms` y fallback por frames. El pattern set oficial `cr01_cr02_v2` opera con `granularity: scene`: la clave de estado es `(pattern_id, source_id)` (ADR-0012); la granularidad por sujeto queda disponible por config.
 - CLI local para replay y generacion de artefactos de corrida.
 
-No incluye servicio HTTP, UI, brokers, base de datos relacional/documental, tracking multi-frame avanzado, zonas, integracion con notificaciones externas ni decisiones normativas automaticas.
+El modulo tambien es un **servicio HTTP config-driven** (`eovrt-control serve`, FastAPI en `:8081`, ADR-0008) y consume el bus ZeroMQ del media-plane en vivo (ver "Servicio HTTP y camino live"). No incluye UI, brokers, base de datos relacional/documental, zonas, integracion con notificaciones externas ni decisiones normativas automaticas.
 
 ## Estructura: nucleo `eovrt_control` + `eovrt_labs`
 
@@ -45,18 +45,26 @@ DetectionEvent -> PatternEngine -> PatternStateChanged -> AlertEvent
 eovrt-control replay configs/replay_dbe_cr01_cr02.yaml
 ```
 
-La corrida crea un directorio bajo `runs/` con `effective_config.yaml`, `pattern_events.jsonl`, `alerts.jsonl`, `alerts.csv`, `metrics.jsonl`, `errors.jsonl` y `summary.json`.
+La corrida crea un directorio timestampeado bajo `runs/` (`runs/<run.name>_<timestampUTC>_<sufijo>/`, p. ej. `runs/replay_dbe_cr01_cr02_20260819T120000Z_ab12cd/`) con `effective_config.yaml`, `pattern_events.jsonl`, `alerts.jsonl`, `alerts.csv`, `pattern_progress.jsonl`, `metrics.jsonl`, `errors.jsonl` y `summary.json`.
 
 Si los patrones exigen confirmacion multi-frame (`confirm_after_frames > 1` o `confirm_after_ms`) pero las detecciones de personas no traen un `detection_id` estable, el replay emite una advertencia (en consola y en `summary.warnings`): la persistencia temporal no podra confirmar condiciones. Genera detecciones con tracking o publica IDs estables desde el plano de medios.
+
+## Servicio HTTP y camino live
+
+- **`eovrt-control serve`** (ADR-0008): servicio FastAPI en `:8081` (`--host`/`--port`). Endpoints: `GET /healthz`, `GET /readyz`, `POST /api/runs` (dispara una corrida `replay` o `live`; config por referencia `config_path` o por payload `config`, ADR-009), `GET /api/runs`, `GET /api/runs/current` (snapshot de patrones activos), `GET|DELETE /api/runs/{id}`, `GET /api/runs/{id}/{alerts,pattern-progress,pattern-events,received-units}`, `GET /api/config`. La webconsole y el runner son clientes de este servicio; la CLI queda para el camino offline.
+- **`eovrt-control live <config>`** (EBE, ADR-0007): consume el bus ZeroMQ del media-plane por SUB (`input.type: bus`, endpoint `tcp://<host>:5557`, topicos `media.detection.v1.` y `run.lifecycle.v1.`). Corrida 1:1 que cierra con `run_finished`. El SUB debe suscribirse ANTES de disparar el run del media-plane (PUB/SUB pierde lo previo a la suscripcion); los huecos de `seq` se cuentan como eventos perdidos, nunca se silencian.
+- **Bus de alertas** (`alert_bus`, insumo del modulo de distribucion): publisher XPUB de `control.alert.v1` que bindea `tcp://0.0.0.0:5558`. **`alert_bus.enabled` es `false` por default** — sin habilitarlo, la distribucion lee 0 alertas aunque el motor produzca. El JSONL sigue siendo la verdad; el bus solo transporta.
+- **`EOVRT_CONTROL_RUNS_DIR`**: directorio raiz de artefactos de corrida del servicio (default `runs/` relativo al CWD).
+- **`eovrt-control evaluate-alerts` v2**: ademas de precision/recall, computa **SDR** y **TTFD** (con `--detections` y `--patterns`, spec 43 seccion 10) y **FAR/hora**, con matching bipartito optimo por ventana en ms a nivel episodio; las `re_alerts` no cuentan como FP (ADR-0011) y la censura por dimensionamiento del clip se reporta como `metric_censored`.
 
 ## Semantica de patrones
 
 - **Asociacion EPP<->persona 1:1**: cada casco/chaleco valida a lo sumo a una persona (la mas cercana al centro de la region esperada). Un EPP ajeno ya no suprime la alerta de otra persona superpuesta.
 - **Persistencia temporal**: una condicion se confirma tras `confirm_after_ms`/`confirm_after_frames` de evidencia sostenida y se resuelve tras `resolve_after_ms`/`resolve_after_frames` de evidencia limpia.
 - **Expiracion de sujetos ausentes** (opcional): `subject_absent_timeout_ms`/`_frames` resuelve un sujeto que deja de observarse antes de limpiar la condicion.
-- **Cooldown de re-alerta** (opcional): `realert_cooldown_ms`/`_frames` evita una nueva alerta por cada ciclo `resolved -> confirmed` dentro de la ventana.
+- **Cooldown de re-alerta** (opcional): `realert_cooldown_ms`/`_frames` evita una nueva alerta por cada ciclo `resolved -> confirmed` dentro de la ventana. **La plataforma NO usa cooldown** (ADR-0011): el motor emite en cada confirmacion y las `re_alerts` no son falsos positivos; el cooldown queda como capacidad del motor sin uso.
 
-Ver `configs/patterns/cr01_cr02_v1.yaml` (smoke test permisivo) y `cr01_cr02_temporal_eval.yaml` (persistencia + expiracion + cooldown).
+El pattern set oficial y UNICO vigente es `configs/patterns/cr01_cr02_v2.yaml` (CR-01 high `confirm_after_ms: 4000`, CR-02 medium `confirm_after_ms: 7000`, `granularity: scene`). `cr01_cr02_v1.yaml` esta **deprecado** (hallazgo F-DR9: su timing por frames produce falsos `missed` contra `derive_clip_gt`) y se conserva solo como fixture de tests. `cr01_cr02_temporal_eval.yaml` ejercita persistencia + expiracion + cooldown en el fixture sintetico.
 
 ## Simulacion temporal CR-01/CR-02
 
@@ -68,10 +76,11 @@ El repo incluye un fixture sintetico que simula la salida del plano de medios (`
 
 ```bash
 eovrt-control replay configs/replay_simulated_cr01_cr02_temporal.yaml
+# los directorios de corrida son timestampeados: usar el que creo el replay
 eovrt-control evaluate-alerts \
-  runs/simulated_cr01_cr02_temporal/alerts.jsonl \
+  runs/<name>_<timestampUTC>_<sufijo>/alerts.jsonl \
   fixtures/simulated_media/cr01_cr02_temporal/ground_truth.json \
-  --output runs/simulated_cr01_cr02_temporal/eval_temporal.json
+  --output runs/<name>_<timestampUTC>_<sufijo>/eval_temporal.json
 ```
 
 Metricas: alertas esperadas/observadas/matcheadas, missed, unexpected, duplicates, precision, recall, F1 y latencia hasta alerta (frames y ms). El caso feliz da F1 = 1.0.
@@ -90,8 +99,10 @@ eovrt-labs generate-detections \
   --track \
   --run-id run_20260702_001 \
   --source-id camera_01
-eovrt-control replay configs/replay_hf_detections.yaml
+eovrt-control replay configs/replay_dbe_cr01_cr02.yaml
 ```
+
+Nota: `configs/replay_hf_detections.yaml` fue archivado (esta roto: su input gitignorado no viaja con el repo; ver `configs/_archive/README.md`). Para replay sobre el JSONL generado, apuntar el `input.path` de la config al archivo producido por el generador.
 
 Backends disponibles: `gdino` (open-vocabulary, por defecto), `yolo-ppe` (construction-site-safety) y `yoloe`. El CLI expone solo los parametros esenciales; los ajustes finos de deteccion y tracking se pasan por un YAML opcional:
 

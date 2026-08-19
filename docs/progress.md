@@ -1,5 +1,38 @@
 # Progreso
 
+## 2026-08-19 — puesta al dia (commits sin documentar) + limpieza + imagen Docker
+
+Una linea por commit no documentado desde la entrada anterior:
+
+- `c1cbb56` — fix(eval): 3 artefactos de medicion que subestimaban la plataforma.
+- `5327080` — feat(engine): evaluador `direct_evidence` + estrategias de evidencia
+  por patron (spec 41 seccion 6).
+- `b0ba763` — feat(engine): identidad por sujeto como capacidad de plataforma
+  (`input.track_persons`, opt-in) + endurecimiento del camino live.
+- `a7cc2fd` — configs: `smoke_claqueta.yaml`, config del humo anclado del doc 101.
+- `b9a5e79` — chore(configs): archivado de los replay de la era piloto
+  (`video16_clip10`; sus outputs en `runs/` ya no son reproducibles).
+- `6f0107f` / `fdb1902` / `87a10aa` — diseño del contenedor del control-plane,
+  correccion del healthcheck y descarte del 2026-08-13.
+
+Hoy (2026-08-19):
+
+- **Reversion del descarte del contenedor**: el despliegue de plataforma completa
+  en Docker Compose reintroduce la imagen — implementada en `infra/docker/Dockerfile`
+  (python:3.11-slim, solo nucleo sin `[labs]`, `EOVRT_CONTROL_RUNS_DIR=/data/runs`,
+  healthcheck `/healthz`, puertos 8081/5558) + `.dockerignore`. Nota de estado
+  actualizada en el spec del diseño.
+- **Limpieza**: borrado `utils/draw_alert_frames.py` (wrapper roto, importaba un
+  paquete inexistente; el real es `eovrt_labs.visualization.frame_drawing`);
+  archivado `configs/replay_cr01_cr02_v2.yaml` (casi-duplicado de
+  `replay_dbe_cr01_cr02.yaml`, cero referencias); `--ignore=tests/labs` codificado
+  en `pyproject.toml` (`addopts`); `.gitignore` completado (`.superpowers/`,
+  `.claude/`, `.DS_Store`, `*.log`).
+- **Docs sincronizados**: README (servicio HTTP/live/bus de alertas/v2 oficial,
+  ejemplos corregidos), architecture (live + servicio + componentes nuevos,
+  tracking opcional, ADR-0011), contracts (`PatternProgress`, `control.alert.v1`,
+  `ControlRunRequest`), y las notas viejas de este archivo.
+
 ## 2026-07-29 — puesta al dia (lo implementado desde 2026-07-02)
 
 Resumen de `git log --since=2026-07-02` en `feature/control-service` y de los
@@ -34,9 +67,9 @@ esta commiteado en la rama salvo indicacion contraria.
   `docs/reportes/2026-07-25-patterns-live-endpoint.md`, sin integrar).
 - **Pattern set v1 deprecado**: la corrida live usa v2 (`ef001ff`, hallazgo
   F-DR9: con v1 —timing por frames— los episodios de `derive_clip_gt` nunca
-  confirman y aparecen falsos `missed`). Hoy (2026-07-29, **sin commitear**):
-  `cr01_cr02_v1.yaml` marcado DEPRECADO en el propio YAML (solo smoke/tests) y
-  `replay_dbe_cr01_cr02.yaml` apuntado a v2.
+  confirman y aparecen falsos `missed`). Hoy (2026-07-29; ✎ commiteado luego en
+  `03ee8b0`): `cr01_cr02_v1.yaml` marcado DEPRECADO en el propio YAML (solo
+  smoke/tests) y `replay_dbe_cr01_cr02.yaml` apuntado a v2.
 - **ADRs materializados** (hoy, 2026-07-29): `docs/decisions/ADR-0006..0013`
   reconstruidos de las fuentes escritas del proyecto (repo `docs`:
   `decisiones/`, specs 41/42, operacion 33/34/37/38/51/52). Desde 0006 la
@@ -50,11 +83,11 @@ esta commiteado en la rama salvo indicacion contraria.
 - Revisar los ADR-0006..0013 recien materializados: son borradores
   reconstruidos a posteriori de los docs del proyecto; validar contra la
   memoria del decisor antes de darlos por definitivos.
-- Versionar el informe de resultados v2 (el reporte
-  `docs/reportes/2026-07-25-patterns-live-endpoint.md` esta suelto/untracked).
-- Commitear la deprecacion de v1 (cambios de hoy en `configs/patterns/
-  cr01_cr02_v1.yaml`, `configs/replay_dbe_cr01_cr02.yaml`, `tests/test_config.py`)
-  — decision del usuario.
+- ~~Versionar el informe de resultados v2~~ ✎ hecho: el reporte
+  `docs/reportes/2026-07-25-patterns-live-endpoint.md` ya esta trackeado.
+- ~~Commitear la deprecacion de v1~~ ✎ hecho en `03ee8b0` (cambios en
+  `configs/patterns/cr01_cr02_v1.yaml`, `configs/replay_dbe_cr01_cr02.yaml`,
+  `tests/test_config.py`).
 - Merge de `feature/control-service` a `main` — pendiente del usuario (`main`
   esta desactualizado).
 - Tramo evaluacion (fuera de este repo, pero lo destraba): pasada humana del GT

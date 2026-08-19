@@ -8,6 +8,11 @@ Motivo: cerrar B2 del relevamiento 114 sin cambiar la semántica del servicio.
 > media-plane, control-plane y distribución como procesos del host. No se implementa
 > ni mantiene una imagen propia del control-plane. El contenido siguiente queda como
 > registro histórico del diseño evaluado, no como plan activo.
+>
+> ✎ 2026-08-19: revertido — el despliegue de plataforma completa en Docker Compose
+> (pedido del usuario, ver `e-ovrt_experimental-setup/infra/platform/`) reintroduce la
+> imagen. Implementada en `infra/docker/Dockerfile` de este repo, siguiendo el §2 de
+> este diseño.
 
 ## 1. Alcance
 
