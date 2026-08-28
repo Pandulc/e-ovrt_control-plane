@@ -48,6 +48,9 @@ al plano fuera de la consola.
 - En la practica la decision se supero sin reabrir E-12: el servicio crecio a
   11 endpoints (DELETE de runs, progreso de patrones, lookup por
   `media_run_id`, patrones activos en la corrida actual, health/ready).
+  ✎ 2026-08-28: son **12 rutas** al HEAD `64cc976` (2 en `health.py`, 9 en
+  `runs.py`, 1 en `config.py`); "11" vale solo si se cuenta GET+DELETE de
+  `/runs/{id}` como un recurso (`docs/operacion/130`, R-08).
 
 ## Fuentes
 

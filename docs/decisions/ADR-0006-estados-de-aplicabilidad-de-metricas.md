@@ -39,7 +39,10 @@ Cableado en este repo:
   `two_node` esta verificada por test.
 - `evaluation/temporal.py` (evaluate-alerts v2) declara `not_applicable:
   non_temporal_source` cuando todas las alertas carecen de `timestamp_ms`, y
-  `not_applicable:no_ground_truth` sin GT.
+  `not_applicable:no_ground_truth` sin GT. ✎ 2026-08-28: precision — `temporal.py`
+  **no emite** `not_applicable:no_ground_truth`; esa causa la emite `report.py` del
+  experimental-setup (repo hermano, fuera de este repo). Lo cableado aca es solo
+  `non_temporal_source` (`docs/operacion/130`, R-08).
 - Extension A2 (2026-07-28, doc 57 seccion 6.7): episodios censurados por
   dimensionamiento del clip (`metric_censored`) — un episodio cuya ventana de
   matching no cabe en el clip no cuenta como fallo de recall/t_alert.
@@ -66,6 +69,11 @@ Adopta el Camino B del informe (seccion 17.3.13).
 - `docs/decisiones/estado-de-implementacion-adrs.md` (repo `docs`) — como quedo:
   implementado 2026-07-11, condicional de relojes two-node resuelto por la
   opcion declarativa (`not_interpretable/cross_node_monotonic_clock`), sin NTP.
+  ✎ 2026-08-28: el nombre de causa que emite el codigo es **`clock_skew`**
+  (`metrics/latency.py:51`; tests `test_latency.py`; tambien `applicability.py` y
+  `report.py` del experimental-setup). `cross_node_monotonic_clock` es el nombre
+  del doc 39 que no se materializo; en el informe usar `clock_skew`
+  (`docs/operacion/130`, R-08).
 - `docs/operacion/51-instrumentacion-5b-control-plane.md` (repo `docs`) — join
   `t_capture->alert` con estados; `docs/operacion/52-evaluate-alerts-v2.md` —
   estados en el evaluador temporal; `docs/operacion/57-...duracion-clips.md`

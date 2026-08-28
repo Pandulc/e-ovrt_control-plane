@@ -50,7 +50,7 @@ El motor de patrones confirma y resuelve condiciones mediante ventanas basadas e
 Dos mecanismos opcionales complementan el ciclo de estados:
 
 - **Expiracion de sujetos ausentes** (`subject_absent_timeout_ms`/`_frames`): un sujeto en estado activo que deja de observarse mas alla del timeout pasa a `resolved`, evitando estados colgados indefinidamente.
-- **Cooldown de re-alerta** (`realert_cooldown_ms`/`_frames`): tras un ciclo `resolved -> confirmed`, no se emite una nueva alerta para el mismo (patron, sujeto) dentro de la ventana de cooldown; el cambio de estado si se registra. Reduce alertas duplicadas por parpadeos de deteccion. **La plataforma no lo usa** (ADR-0011): el pattern set oficial `cr01_cr02_v2` emite en cada confirmacion y las `re_alerts` no se cuentan como falsos positivos; queda como capacidad del motor.
+- **Cooldown de re-alerta** (`realert_cooldown_ms`/`_frames`): tras un ciclo `resolved -> confirmed`, no se emite una nueva alerta para el mismo (patron, sujeto) dentro de la ventana de cooldown; el cambio de estado si se registra. Reduce alertas duplicadas por parpadeos de deteccion. **La plataforma no lo usa** (ADR-0011): el pattern set oficial `cr01_cr02_v2` emite en cada confirmacion y las `re_alerts` no se cuentan como falsos positivos; queda como capacidad del motor. ✎ 2026-08-28: dicho con precision — **capacidad presente en el codigo, desactivada por default y no configurada en `cr01_cr02_v2`**; la supresion de re-notificacion que si opera en la plataforma vive en el **distribuidor** (`e-ovrt_alert-distribution`, clave `(condition_id, source_id)`, ventana de 30 s), no en este motor (ADR-0011; `docs/operacion/130`).
 
 Ambos son opt-in (sin valor configurado, el comportamiento es el historico).
 

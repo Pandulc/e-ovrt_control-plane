@@ -66,6 +66,18 @@ Si los patrones exigen confirmacion multi-frame (`confirm_after_frames > 1` o `c
 
 El pattern set oficial y UNICO vigente es `configs/patterns/cr01_cr02_v2.yaml` (CR-01 high `confirm_after_ms: 4000`, CR-02 medium `confirm_after_ms: 7000`, `granularity: scene`). `cr01_cr02_v1.yaml` esta **deprecado** (hallazgo F-DR9: su timing por frames produce falsos `missed` contra `derive_clip_gt`) y se conserva solo como fixture de tests. `cr01_cr02_temporal_eval.yaml` ejercita persistencia + expiracion + cooldown en el fixture sintetico.
 
+> ✎ **2026-08-28 — pattern sets de campaña (variable unica frente a `v2`; `docs/operacion/130`).**
+> "Unico vigente" describe el set **de referencia**, no el unico en `configs/patterns/`. Las
+> campañas del banco de clips usaron cuatro sets derivados de `v2` que cambian **una sola
+> variable** cada uno y comparten sus umbrales (4.000/7.000 ms, histeresis 2.000/3.000):
+> `cr01_cr02_v2_subject.yaml` (`granularity: subject`, campañas G1/R2/R4/R6/I2),
+> `cr01_cr02_edir_v1.yaml` (evidencia **directa** — `person_without_helmet_direct` /
+> `person_without_vest_direct`, campaña D1), `cr01_cr02_hyb_or_v1.yaml` (hibrido OR, campaña H1)
+> y `cr01_bare_head_v1.yaml` (CR-01 por `bare_head`, campaña B1). La identidad por sujeto de G1
+> se habilita ademas con `input.track_persons: true` (tracker IoU por `source_id`, ver
+> `docs/architecture.md`; sin `track_id` degrada a escena con causa `no_track_id`). Ninguno de
+> ellos reemplaza a `v2` como set oficial.
+
 ## Simulacion temporal CR-01/CR-02
 
 El repo incluye un fixture sintetico que simula la salida del plano de medios (`media.detection.v1`) para probar persistencia temporal:
