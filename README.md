@@ -142,3 +142,8 @@ Tambien se aceptan `alerts.jsonl` y `pattern_events.jsonl`. La salida incluye im
 ## Estado
 
 Ver [docs/progress.md](docs/progress.md).
+
+## Licencia
+
+El código y la documentación de este repositorio se distribuyen bajo licencia MIT
+(ver [`LICENSE`](LICENSE)).
