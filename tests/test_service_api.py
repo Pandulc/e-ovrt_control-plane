@@ -239,6 +239,8 @@ def test_current_reports_the_active_run_and_its_progress(client, bus_endpoint) -
         # pero la clave siempre esta presente para que la consola no tenga que
         # distinguir "sin engine" de "sin patrones activos".
         assert body["patterns"] == []
+        # Idem para los episodios en curso (demo de la defensa, spec 2026-10-23 §6.2).
+        assert body["episodes"] == []
     finally:
         client.app.state.manager.shutdown()
         client.app.state.manager.join_active(timeout=30.0)

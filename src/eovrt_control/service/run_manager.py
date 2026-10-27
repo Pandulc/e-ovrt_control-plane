@@ -397,6 +397,15 @@ class RunManager:
                 if active.progress.engine is not None
                 else []
             ),
+            # Todo episodio en curso (candidate/confirmed/sustained) con su avance
+            # hacia la confirmacion y la resolucion (`PatternEngine.snapshot_episodes`).
+            # Solo lectura, para la pantalla de la demo (spec 2026-10-23 §6.2);
+            # `patterns` queda identico para no tocar a sus consumidores.
+            "episodes": (
+                active.progress.engine.snapshot_episodes()
+                if active.progress.engine is not None
+                else []
+            ),
         }
 
     def _execute(self, active: ActiveRun) -> None:

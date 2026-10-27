@@ -744,3 +744,71 @@ def test_snapshot_active_clamps_active_ms_to_zero_never_negative(monkeypatch) ->
     monkeypatch.setattr("eovrt_control.engine.pattern_engine.time.monotonic", lambda: 9.0)
     snapshot = engine.snapshot_active()
     assert snapshot[0]["active_ms"] == 0.0
+
+
+# --- snapshot_episodes (demo de la defensa, spec 2026-10-23 §6.2) -----------------
+
+
+def test_snapshot_episodes_is_empty_when_nothing_was_ever_processed() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+    assert engine.snapshot_episodes() == []
+
+
+def test_snapshot_episodes_includes_a_candidate_with_its_progress() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+    engine.process(_event_at(0.0, 0))
+    engine.process(_event_at(400.0, 1))
+
+    episodes = engine.snapshot_episodes()
+    assert len(episodes) == 1
+    ep = episodes[0]
+    assert ep["condition_id"] == "CR-01"
+    assert ep["state"] == "candidate"
+    assert ep["elapsed_ms"] == 400.0
+    assert ep["confirm_after_ms"] == 1000.0
+    assert ep["resolve_after_ms"] == 500.0
+    assert ep["clear_elapsed_ms"] is None
+    assert ep["key"] == f"CR-01:{ep['subject_key']}"
+    # snapshot_active sigue sin ver candidatos: patterns[] no cambia.
+    assert engine.snapshot_active() == []
+
+
+def test_snapshot_episodes_reports_resolution_progress_of_a_confirmed_episode() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+    engine.process(_event_at(0.0, 0))
+    engine.process(_event_at(1000.0, 1))  # confirmed
+    engine.process(_event_at(1100.0, 2, has_helmet=True))  # empieza a resolver
+    engine.process(_event_at(1300.0, 3, has_helmet=True))
+
+    (ep,) = engine.snapshot_episodes()
+    assert ep["state"] == "confirmed"
+    assert ep["clear_elapsed_ms"] == 200.0
+    assert ep["resolve_after_ms"] == 500.0
+
+
+def test_snapshot_episodes_drops_a_resolved_episode() -> None:
+    engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+    engine.process(_event_at(0.0, 0))
+    engine.process(_event_at(1000.0, 1))
+    engine.process(_event_at(1100.0, 2, has_helmet=True))
+    engine.process(_event_at(1600.0, 3, has_helmet=True))  # resolved
+    assert engine.snapshot_episodes() == []
+
+
+def test_snapshot_episodes_has_no_side_effects_on_the_state_machine() -> None:
+    """Leer la foto en cada unidad no cambia ni un evento ni una alerta."""
+    sequence = [(0.0, 0, False), (400.0, 1, False), (1000.0, 2, False), (1100.0, 3, True),
+                (1600.0, 4, True), (1700.0, 5, False), (2800.0, 6, False)]
+
+    def run(read_snapshot: bool) -> list[tuple[str, int]]:
+        engine = PatternEngine(control_run_id="control-run", patterns=[_time_pattern()])
+        out: list[tuple[str, int]] = []
+        for ts, frame, helmet in sequence:
+            result = engine.process(_event_at(ts, frame, has_helmet=helmet))
+            out.extend((e.state, e.frame_index) for e in result.pattern_events)
+            out.extend(("alert", a.frame_index) for a in result.alerts)
+            if read_snapshot:
+                engine.snapshot_episodes()
+        return out
+
+    assert run(read_snapshot=True) == run(read_snapshot=False)

@@ -129,6 +129,71 @@ class PatternEngine:
             )
         return active
 
+    def snapshot_episodes(self) -> list[dict[str, object]]:
+        """Foto de solo lectura de TODO episodio en curso (`candidate`, `confirmed` o
+        `sustained`), con el avance hacia la confirmacion y hacia la resolucion.
+
+        Agregado para la demo en vivo de la defensa (spec 2026-10-23 §6.2): la pantalla
+        muestra "confirmando x / 4 s" y "resolviendo x / 2 s", que `snapshot_active`
+        no puede dar (solo ve confirmed/sustained y no expone el avance). Mismas reglas
+        que `snapshot_active`: sin efectos (no toca `self._state`), copia los items
+        antes de iterar porque el hilo de ejecucion puede estar mutando el estado.
+
+        Los tiempos de avance (`elapsed_ms`, `clear_elapsed_ms`) son tiempo de
+        FUENTE, el mismo reloj con el que `_confirmation_met`/`_resolution_met`
+        deciden: la barra llega a 100 % exactamente cuando el motor transiciona.
+        `active_ms` es el transcurrido real (monotonico) desde la primera evidencia,
+        con la misma semantica que en `snapshot_active`.
+        """
+        items = list(self._state.items())
+        episodes: list[dict[str, object]] = []
+        now_monotonic_ms = time.monotonic() * 1000.0
+        for (pattern_id, subject_key), runtime_state in items:
+            state = runtime_state.state
+            if state not in {"candidate", "confirmed", "sustained"}:
+                continue
+            pattern = self._patterns_by_id.get(pattern_id)
+            timing = pattern.timing if pattern is not None else None
+            first_hit = runtime_state.first_hit_timestamp_ms
+            last_seen = runtime_state.last_seen_timestamp_ms
+            clear_started = runtime_state.clear_started_timestamp_ms
+            elapsed_ms: float | None = None
+            if first_hit is not None and last_seen is not None:
+                elapsed_ms = max(0.0, last_seen - first_hit)
+            clear_elapsed_ms: float | None = None
+            if runtime_state.clear_count > 0 and clear_started is not None and last_seen is not None:
+                clear_elapsed_ms = max(0.0, last_seen - clear_started)
+            active_ms: float | None = None
+            if runtime_state.first_evidence_monotonic_ms is not None:
+                active_ms = max(0.0, now_monotonic_ms - runtime_state.first_evidence_monotonic_ms)
+            condition_id = pattern.condition_id if pattern is not None else pattern_id
+            episodes.append(
+                {
+                    "pattern_id": pattern_id,
+                    "condition_id": condition_id,
+                    "severity": pattern.severity if pattern is not None else None,
+                    "subject_key": subject_key,
+                    "key": f"{condition_id}:{subject_key}",
+                    "state": state,
+                    "elapsed_ms": elapsed_ms,
+                    "confirm_after_ms": timing.confirm_after_ms if timing is not None else None,
+                    "hit_count": runtime_state.hit_count,
+                    "confirm_after_frames": (
+                        timing.confirm_after_frames if timing is not None else None
+                    ),
+                    "clear_elapsed_ms": clear_elapsed_ms,
+                    "resolve_after_ms": timing.resolve_after_ms if timing is not None else None,
+                    "clear_count": runtime_state.clear_count,
+                    "resolve_after_frames": (
+                        timing.resolve_after_frames if timing is not None else None
+                    ),
+                    "since_timestamp_ms": first_hit,
+                    "last_seen_timestamp_ms": last_seen,
+                    "active_ms": active_ms,
+                }
+            )
+        return episodes
+
     def process(
         self, event: DetectionEvent, ts_receive_ms: float | None = None
     ) -> PatternEngineResult:
